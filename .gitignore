@@ -3,8 +3,5 @@ __pycache__/
 *.pyc
 *.pyo
 
-# Gespeicherte Modelle und Resultate
-save/
-
 # VS Code
 .vscode/

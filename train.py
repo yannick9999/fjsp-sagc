@@ -129,7 +129,14 @@ def main():
 
         # if iter mod x = 0 then validate the policy (x = 10 in paper)
         if i % train_paras["save_timestep"] == 0:
-            print('\nStart validating')
+            elapsed = time.time() - start_time
+            remaining = (elapsed / i) * (train_paras["max_iterations"] - i)
+            total = (elapsed / i) * train_paras["max_iterations"]
+            print(f'\n[Iter {i}/{train_paras["max_iterations"]} | '
+                  f'Elapsed: {time.strftime("%H:%M:%S", time.gmtime(elapsed))} | '
+                  f'Remaining: ~{time.strftime("%H:%M:%S", time.gmtime(remaining))} | '
+                  f'Total: ~{time.strftime("%H:%M:%S", time.gmtime(total))}]')
+            print('Start validating')
             # Record the average results and the results on each instance
             vali_result, vali_result_100 = validate(env_valid_paras, env_valid, model.policy_old)
             valid_results.append(vali_result.item())
