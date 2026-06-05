@@ -89,7 +89,7 @@ class GATedge(nn.Module):
         # Calculate attention coefficients
         el = (feat_src * self.attn_l).sum(dim=-1).unsqueeze(-1)
         er = (feat_dst * self.attn_r).sum(dim=-1).unsqueeze(-1)
-        ee = (feat_edge * self.attn_l).sum(dim=-1).unsqueeze(-1)
+        ee = (feat_edge * self.attn_e).sum(dim=-1).unsqueeze(-1) # Fixed a bug from Song
         el_add_ee = ope_ma_adj_batch[batch_idxes].unsqueeze(-1) * el.unsqueeze(-2) + ee
         a = el_add_ee + ope_ma_adj_batch[batch_idxes].unsqueeze(-1) * er.unsqueeze(-3)
         eijk = self.leaky_relu(a)
