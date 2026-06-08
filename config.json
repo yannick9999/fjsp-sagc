@@ -1,7 +1,7 @@
 {
   "env_paras": {
-    "num_jobs": 10,
-    "num_mas": 5,
+    "num_jobs": 20,
+    "num_mas": 10,
     "batch_size": 20,
     "ope_feat_dim" : 6,
     "ma_feat_dim" : 3,
