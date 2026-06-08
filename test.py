@@ -4,13 +4,13 @@ import os
 import random
 import time as time
 
-import gym
 import pandas as pd
 import torch
 import numpy as np
 
 import pynvml
 import PPO_model
+from env.fjsp_env import FJSPEnv
 from env.load_data import nums_detec
 
 def setup_seed(seed):
@@ -23,9 +23,11 @@ def setup_seed(seed):
 def main():
     # PyTorch initialization
     # gpu_tracker = MemTracker()  # Used to monitor memory (of gpu)
-    pynvml.nvmlInit()
-    handle = pynvml.nvmlDeviceGetHandleByIndex(0)
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    handle = None
+    if device.type == 'cuda':
+        pynvml.nvmlInit()
+        handle = pynvml.nvmlDeviceGetHandleByIndex(0)
     if device.type=='cuda':
         torch.cuda.set_device(device)
         torch.set_default_tensor_type('torch.cuda.FloatTensor')
@@ -83,10 +85,8 @@ def main():
     file_name = [test_files[i] for i in range(num_ins)]
     data_file = pd.DataFrame(file_name, columns=["file_name"])
     data_file.to_excel(writer, sheet_name='Sheet1', index=False)
-    writer.save()
     writer.close()
     data_file.to_excel(writer_time, sheet_name='Sheet1', index=False)
-    writer_time.save()
     writer_time.close()
 
     # Rule-by-rule (model-by-model) testing
@@ -122,16 +122,17 @@ def main():
             # Create environment object
             else:
                 # Clear the existing environment
-                meminfo = pynvml.nvmlDeviceGetMemoryInfo(handle)
-                if meminfo.used / meminfo.total > 0.7:
-                    envs.clear()
+                if handle is not None:
+                    meminfo = pynvml.nvmlDeviceGetMemoryInfo(handle)
+                    if meminfo.used / meminfo.total > 0.7:
+                        envs.clear()
                 # DRL-S, each env contains multiple (=num_sample) copies of one instance
                 if test_paras["sample"]:
-                    env = gym.make('fjsp-v0', case=[test_file] * test_paras["num_sample"],
-                                   env_paras=env_test_paras, data_source='file')
+                    env = FJSPEnv(case=[test_file] * test_paras["num_sample"],
+                                  env_paras=env_test_paras, data_source='file')
                 # DRL-G, each env contains one instance
                 else:
-                    env = gym.make('fjsp-v0', case=[test_file], env_paras=env_test_paras, data_source='file')
+                    env = FJSPEnv(case=[test_file], env_paras=env_test_paras, data_source='file')
                 envs.append(copy.deepcopy(env))
                 print("Create env[{0}]".format(i_ins))
 
