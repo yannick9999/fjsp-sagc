@@ -5,7 +5,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=24
 #SBATCH --gpus-per-node=1
-#SBATCH --time=2:00:00
+#SBATCH --time=6:00:00
 #SBATCH --output=logs/slurm-%j.out
 #SBATCH --error=logs/slurm-%j.err
 
@@ -24,4 +24,4 @@ PYTHON="/home/grafyann/master_thesis_env/bin/python"
 
 srun nvidia-smi || true
 
-exec srun "${PYTHON}" train.py
+exec srun "${PYTHON}" run_test_suite.py
