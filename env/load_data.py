@@ -18,7 +18,7 @@ def load_fjs(lines, num_mas, num_opes):
         if flag == 0:
             flag += 1
         # last line
-        elif line is "\n":
+        elif line == "\n":
             break
         # other
         else:

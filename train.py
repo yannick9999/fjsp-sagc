@@ -8,7 +8,7 @@ from collections import deque
 import pandas as pd
 import torch
 import numpy as np
-# from visdom import Visdom
+import matplotlib.pyplot as plt
 
 import PPO_model
 from env.case_generator import CaseGenerator
@@ -29,9 +29,10 @@ def main():
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     if device.type == 'cuda':
         torch.cuda.set_device(device)
-        torch.set_default_tensor_type('torch.cuda.FloatTensor')
+        torch.set_default_dtype(torch.float32)
+        torch.set_default_device('cuda')
     else:
-        torch.set_default_tensor_type('torch.FloatTensor')
+        torch.set_default_dtype(torch.float32)
     print("PyTorch device: ", device.type)
     torch.set_printoptions(precision=None, threshold=np.inf, edgeitems=None, linewidth=None, profile=None, sci_mode=False)
 
@@ -60,10 +61,17 @@ def main():
     best_models = deque()
     makespan_best = float('inf')
 
-    # Use visdom to visualize the training process
+    # Use matplotlib to visualize the training process
     is_viz = train_paras["viz"]
     if is_viz:
-        viz = Visdom(env=train_paras["viz_name"])
+        plt.ion()
+        fig, (ax_reward, ax_loss, ax_makespan) = plt.subplots(3, 1, figsize=(10, 8))
+        ax_reward.set_title('reward of envs')
+        ax_loss.set_title('loss of envs')
+        ax_makespan.set_title('makespan of valid')
+        viz_x_reward, viz_y_reward = [], []
+        viz_x_loss, viz_y_loss = [], []
+        viz_x_makespan, viz_y_makespan = [], []
 
     # Generate data files and fill in the header
     str_time = time.strftime("%Y%m%d_%H%M%S", time.localtime(time.time()))
@@ -122,10 +130,13 @@ def main():
             print("reward: ", '%.3f' % reward, "; loss: ", '%.3f' % loss)
             memories.clear_memory()
             if is_viz:
-                viz.line(X=np.array([i]), Y=np.array([reward]),
-                    win='window{}'.format(0), update='append', opts=dict(title='reward of envs'))
-                viz.line(X=np.array([i]), Y=np.array([loss]),
-                    win='window{}'.format(1), update='append', opts=dict(title='loss of envs'))  # deprecated
+                viz_x_reward.append(i); viz_y_reward.append(reward)
+                ax_reward.cla(); ax_reward.set_title('reward of envs')
+                ax_reward.plot(viz_x_reward, viz_y_reward)
+                viz_x_loss.append(i); viz_y_loss.append(loss)
+                ax_loss.cla(); ax_loss.set_title('loss of envs')
+                ax_loss.plot(viz_x_loss, viz_y_loss)
+                plt.tight_layout(); plt.pause(0.001)
 
         # if iter mod x = 0 then validate the policy (x = 10 in paper)
         if i % train_paras["save_timestep"] == 0:
@@ -153,9 +164,10 @@ def main():
                 torch.save(model.policy.state_dict(), save_file)
 
             if is_viz:
-                viz.line(
-                    X=np.array([i]), Y=np.array([vali_result.item()]),
-                    win='window{}'.format(2), update='append', opts=dict(title='makespan of valid'))
+                viz_x_makespan.append(i); viz_y_makespan.append(vali_result.item())
+                ax_makespan.cla(); ax_makespan.set_title('makespan of valid')
+                ax_makespan.plot(viz_x_makespan, viz_y_makespan)
+                plt.tight_layout(); plt.pause(0.001)
 
     # Save the data of training curve to files
     data = pd.DataFrame(np.array(valid_results).transpose(), columns=["res"])
@@ -163,10 +175,15 @@ def main():
 
     writer_ave.close()
     column = [i_col for i_col in range(100)]
-    data = pd.DataFrame(np.array(torch.stack(valid_results_100, dim=0).to('cpu')), columns=column)
+    data = pd.DataFrame(torch.stack(valid_results_100, dim=0).to('cpu').numpy(), columns=column)
     data.to_excel(writer_100, sheet_name='Sheet1', index=False, startcol=1)
 
     writer_100.close()
+
+    if is_viz:
+        fig.savefig('{0}/training_plot_{1}.png'.format(save_path, str_time))
+        plt.ioff()
+        plt.close()
 
     print("total_time: ", time.time() - start_time)
 

@@ -139,10 +139,14 @@ class FJSPEnv(gym.Env):
                 Number of unscheduled operations in the job
                 Job completion time
                 Start time
+                Slack (makespan - job completion time)
+                Critical path flag (1 if slack == 0, else 0)
             ma:
                 Number of neighboring operations
                 Available time
                 Utilization
+                Machine load (sum of processing times of all assignable operations)
+                Critical path load (sum of processing times of critical path operations)
         '''
         # Generate raw feature vectors
         feat_opes_batch = torch.zeros(size=(self.batch_size, self.paras["ope_feat_dim"], self.num_opes))
@@ -157,6 +161,7 @@ class FJSPEnv(gym.Env):
                           feat_opes_batch[:, 2, :]).gather(1, self.end_ope_biases_batch)
         feat_opes_batch[:, 4, :] = convert_feat_job_2_ope(end_time_batch, self.opes_appertain_batch)
         feat_mas_batch[:, 0, :] = torch.count_nonzero(self.ope_ma_adj_batch, dim=1)
+        feat_mas_batch[:, 3, :] = torch.sum(self.proc_times_batch, dim=1)
         self.feat_opes_batch = feat_opes_batch
         self.feat_mas_batch = feat_mas_batch
 
@@ -188,6 +193,9 @@ class FJSPEnv(gym.Env):
         self.machines_batch[:, :, 0] = torch.ones(size=(self.batch_size, self.num_mas))
 
         self.makespan_batch = torch.max(self.feat_opes_batch[:, 4, :], dim=1)[0]  # shape: (batch_size)
+        self.feat_opes_batch[:, 6, :] = self.makespan_batch[:, None] - self.feat_opes_batch[:, 4, :]
+        self.feat_opes_batch[:, 7, :] = (self.feat_opes_batch[:, 6, :] == 0).float()
+        self.feat_mas_batch[:, 4, :] = torch.sum(self.proc_times_batch * self.feat_opes_batch[:, 7, :].unsqueeze(2), dim=1)
         self.done_batch = self.mask_job_finish_batch.all(dim=1)  # shape: (batch_size)
 
         self.state = EnvState(batch_idxes=self.batch_idxes,
@@ -271,6 +279,7 @@ class FJSPEnv(gym.Env):
         utiliz = torch.minimum(utiliz, cur_time)
         utiliz = utiliz.div(self.time[self.batch_idxes, None] + 1e-9)
         self.feat_mas_batch[self.batch_idxes, 2, :] = utiliz
+        self.feat_mas_batch[self.batch_idxes, 3, :] = torch.sum(self.proc_times_batch[self.batch_idxes], dim=1)
 
         # Update other variable according to actions
         self.ope_step_batch[self.batch_idxes, jobs] += 1
@@ -284,6 +293,9 @@ class FJSPEnv(gym.Env):
         max = torch.max(self.feat_opes_batch[:, 4, :], dim=1)[0]
         self.reward_batch = self.makespan_batch - max
         self.makespan_batch = max
+        self.feat_opes_batch[self.batch_idxes, 6, :] = self.makespan_batch[self.batch_idxes, None] - self.feat_opes_batch[self.batch_idxes, 4, :]
+        self.feat_opes_batch[self.batch_idxes, 7, :] = (self.feat_opes_batch[self.batch_idxes, 6, :] == 0).float()
+        self.feat_mas_batch[self.batch_idxes, 4, :] = torch.sum(self.proc_times_batch[self.batch_idxes] * self.feat_opes_batch[self.batch_idxes, 7, :].unsqueeze(2), dim=1)
 
         # Check if there are still O-M pairs to be processed, otherwise the environment transits to the next time
         flag_trans_2_next_time = self.if_no_eligible()

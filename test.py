@@ -36,9 +36,10 @@ def main():
         handle = pynvml.nvmlDeviceGetHandleByIndex(0)
     if device.type=='cuda':
         torch.cuda.set_device(device)
-        torch.set_default_tensor_type('torch.cuda.FloatTensor')
+        torch.set_default_dtype(torch.float32)
+        torch.set_default_device('cuda')
     else:
-        torch.set_default_tensor_type('torch.FloatTensor')
+        torch.set_default_dtype(torch.float32)
     print("PyTorch device: ", device.type)
     torch.set_printoptions(precision=None, threshold=np.inf, edgeitems=None, linewidth=None, profile=None, sci_mode=False)
 
