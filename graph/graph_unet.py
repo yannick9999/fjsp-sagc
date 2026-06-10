@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .hgnn import GATedge, MLPsim
-from pooling.topk import TopKPool, TopKUnpool
+from .pooling import build_pooling, build_unpooling
 
 
 class MLPs(nn.Module):
@@ -91,18 +91,22 @@ class GraphUNet(nn.Module):
     Returns full size operation embeddings so the actor keeps node level
     resolution, plus machine embeddings recomputed at full resolution.
     '''
-    def __init__(self, in_size_ope, in_size_ma, out_size_ope, out_size_ma,
-                 hidden_size_ope, num_head, dropout, ratio):
+    def __init__(self, model_paras):
         super().__init__()
-        d_ope = out_size_ope
-        d_ma = out_size_ma
+        in_size_ope     = model_paras["in_size_ope"]
+        in_size_ma      = model_paras["in_size_ma"]
+        d_ope           = model_paras["out_size_ope"]
+        d_ma            = model_paras["out_size_ma"]
+        hidden_size_ope = model_paras["hidden_size_ope"]
+        num_head        = model_paras["num_heads"][0]
+        dropout         = model_paras["dropout"]
 
         self.enc = GCNBlock(in_size_ope, in_size_ma, d_ope, d_ma,
                             hidden_size_ope, num_head, dropout)
-        self.pool = TopKPool(d_ope, ratio)
+        self.pool = build_pooling(model_paras)
         self.btn = GCNBlock(d_ope, d_ma, d_ope, d_ma,
                             hidden_size_ope, num_head, dropout)
-        self.unpool = TopKUnpool()
+        self.unpool = build_unpooling(model_paras)
         self.dec = GCNBlock(d_ope, d_ma, d_ope, d_ma,
                             hidden_size_ope, num_head, dropout)
 

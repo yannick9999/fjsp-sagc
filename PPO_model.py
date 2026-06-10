@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import Categorical
 from graph.hgnn import GATedge, MLPsim
+from graph.graph_unet import GraphUNet
 from mlp import MLPCritic, MLPActor
 
 
@@ -144,6 +145,10 @@ class HGNNScheduler(nn.Module):
         self.actor = MLPActor(self.n_hidden_actor, self.actor_dim, self.n_latent_actor, self.action_dim).to(self.device)
         self.critic = MLPCritic(self.n_hidden_critic, self.critic_dim, self.n_latent_critic, 1).to(self.device)
 
+        self.coarsening = model_paras["pooling"]["method"]   # "none" | "topk" | ...
+        if self.coarsening != "none":
+            self.graph_unet = GraphUNet(model_paras)
+
     def forward(self):
         '''
         Replaced by separate act and evaluate functions
@@ -197,6 +202,29 @@ class HGNNScheduler(nn.Module):
         return ((raw_opes - mean_opes) / (std_opes + 1e-5), (raw_mas - mean_mas) / (std_mas + 1e-5),
                 proc_time_norm)
 
+    def embed(self, ope_ma_adj, ope_pre_adj, ope_sub_adj, features, nums_opes, eligible_opes):
+        '''
+        All inputs already indexed to the active batch.
+        features = (raw_opes, raw_mas, proc_time)
+        returns h_opes [B, N, d_ope], h_mas [B, M, d_ma]
+        '''
+        B = features[0].size(0)
+        batch_idxes = torch.arange(B, device=features[0].device)
+
+        if self.coarsening != "none":
+            return self.graph_unet(features[0], features[1], features[2],
+                                   ope_ma_adj, ope_pre_adj, ope_sub_adj,
+                                   nums_opes, eligible_opes)
+
+        # Song's baseline, L iterations of the HGNN
+        for i in range(len(self.num_heads)):
+            h_mas = self.get_machines[i](ope_ma_adj, batch_idxes, features)
+            features = (features[0], h_mas, features[2])
+            h_opes = self.get_operations[i](ope_ma_adj, ope_pre_adj, ope_sub_adj,
+                                            batch_idxes, features)
+            features = (h_opes, features[1], features[2])
+        return h_opes, h_mas
+
     def get_action_prob(self, state, memories, flag_sample=False, flag_train=False):
         '''
         Get the probability of selecting each action in decision-making
@@ -214,17 +242,19 @@ class HGNNScheduler(nn.Module):
         norm_mas = (copy.deepcopy(features[1]))
         norm_proc = (copy.deepcopy(features[2]))
 
-        # L iterations of the HGNN
-        for i in range(len(self.num_heads)):
-            # First Stage, machine node embedding
-            # shape: [len(batch_idxes), num_mas, out_size_ma]
-            h_mas = self.get_machines[i](state.ope_ma_adj_batch, state.batch_idxes, features)
-            features = (features[0], h_mas, features[2])
-            # Second Stage, operation node embedding
-            # shape: [len(batch_idxes), max(num_opes), out_size_ope]
-            h_opes = self.get_operations[i](state.ope_ma_adj_batch, state.ope_pre_adj_batch, state.ope_sub_adj_batch,
-                                            state.batch_idxes, features)
-            features = (h_opes, features[1], features[2])
+        # Index adjacencies to the active batch
+        ope_ma_adj = state.ope_ma_adj_batch[batch_idxes]
+        ope_pre_adj = state.ope_pre_adj_batch[batch_idxes]
+        ope_sub_adj = state.ope_sub_adj_batch[batch_idxes]
+
+        # Derive eligible_opes from the current step of each job
+        ope_step_batch = torch.where(state.ope_step_batch > state.end_ope_biases_batch,
+                                     state.end_ope_biases_batch, state.ope_step_batch)
+        N = features[0].size(1)
+        eligible_opes = torch.zeros(batch_idxes.size(0), N, dtype=torch.bool, device=features[0].device)
+        eligible_opes.scatter_(1, ope_step_batch[batch_idxes], True)
+
+        h_opes, h_mas = self.embed(ope_ma_adj, ope_pre_adj, ope_sub_adj, features, nums_opes, eligible_opes)
 
         # Stacking and pooling
         h_mas_pooled = h_mas.mean(dim=-2)  # shape: [len(batch_idxes), out_size_ma]
@@ -238,8 +268,6 @@ class HGNNScheduler(nn.Module):
             h_opes_pooled = h_opes.mean(dim=-2)  # shape: [len(batch_idxes), out_size_ope]
 
         # Detect eligible O-M pairs (eligible actions) and generate tensors for actor calculation
-        ope_step_batch = torch.where(state.ope_step_batch > state.end_ope_biases_batch,
-                                     state.end_ope_biases_batch, state.ope_step_batch)
         jobs_gather = ope_step_batch[..., :, None].expand(-1, -1, h_opes.size(-1))[batch_idxes]
         h_jobs = h_opes.gather(1, jobs_gather)
         # Matrix indicating whether processing is possible
@@ -316,7 +344,6 @@ class HGNNScheduler(nn.Module):
 
     def evaluate(self, ope_ma_adj, ope_pre_adj, ope_sub_adj, raw_opes, raw_mas, proc_time,
                  jobs_gather, eligible, nums_opes, action_envs, flag_sample=False):
-        batch_idxes = torch.arange(0, ope_ma_adj.size(-3)).long()
         features = (raw_opes, raw_mas, proc_time)
 
         ope_step = jobs_gather[..., 0]                       # [B, num_jobs]
@@ -324,12 +351,8 @@ class HGNNScheduler(nn.Module):
         eligible_opes = torch.zeros(raw_opes.size(0), N, dtype=torch.bool, device=raw_opes.device)
         eligible_opes.scatter_(1, ope_step, True)
 
-        # L iterations of the HGNN
-        for i in range(len(self.num_heads)):
-            h_mas = self.get_machines[i](ope_ma_adj, batch_idxes, features)
-            features = (features[0], h_mas, features[2])
-            h_opes = self.get_operations[i](ope_ma_adj, ope_pre_adj, ope_sub_adj, batch_idxes, features)
-            features = (h_opes, features[1], features[2])
+        h_opes, h_mas = self.embed(ope_ma_adj, ope_pre_adj, ope_sub_adj,
+                                   features, nums_opes, eligible_opes)
 
         # Stacking and pooling
         h_mas_pooled = h_mas.mean(dim=-2)
