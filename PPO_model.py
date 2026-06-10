@@ -315,9 +315,14 @@ class HGNNScheduler(nn.Module):
         return torch.stack((opes, mas, jobs), dim=1).t()
 
     def evaluate(self, ope_ma_adj, ope_pre_adj, ope_sub_adj, raw_opes, raw_mas, proc_time,
-                 jobs_gather, eligible, action_envs, flag_sample=False):
+                 jobs_gather, eligible, nums_opes, action_envs, flag_sample=False):
         batch_idxes = torch.arange(0, ope_ma_adj.size(-3)).long()
         features = (raw_opes, raw_mas, proc_time)
+
+        ope_step = jobs_gather[..., 0]                       # [B, num_jobs]
+        N = raw_opes.size(1)
+        eligible_opes = torch.zeros(raw_opes.size(0), N, dtype=torch.bool, device=raw_opes.device)
+        eligible_opes.scatter_(1, ope_step, True)
 
         # L iterations of the HGNN
         for i in range(len(self.num_heads)):
@@ -383,6 +388,7 @@ class PPO:
         old_proc_time = torch.stack(memory.proc_time, dim=0).transpose(0, 1).flatten(0, 1)
         old_jobs_gather = torch.stack(memory.jobs_gather, dim=0).transpose(0, 1).flatten(0, 1)
         old_eligible = torch.stack(memory.eligible, dim=0).transpose(0, 1).flatten(0, 1)
+        old_nums_opes = torch.stack(memory.nums_opes, dim=0).transpose(0, 1).flatten(0, 1)
         memory_rewards = torch.stack(memory.rewards, dim=0).transpose(0,1)
         memory_is_terminals = torch.stack(memory.is_terminals, dim=0).transpose(0,1)
         old_logprobs = torch.stack(memory.logprobs, dim=0).transpose(0,1).flatten(0,1)
@@ -427,6 +433,7 @@ class PPO:
                                          old_proc_time[start_idx: end_idx, :, :],
                                          old_jobs_gather[start_idx: end_idx, :, :],
                                          old_eligible[start_idx: end_idx, :, :],
+                                         old_nums_opes[start_idx: end_idx],
                                          old_action_envs[start_idx: end_idx])
 
                 ratios = torch.exp(logprobs - old_logprobs[i*minibatch_size:(i+1)*minibatch_size].detach())
