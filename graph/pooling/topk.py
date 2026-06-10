@@ -75,6 +75,7 @@ class TopKPool(nn.Module):
             adj_pooled = adj_pooled.gather(2, idx_col)             # [B, k, k]
 
             # A + A^2 reconnects nodes that had a path through a removed node
+            adj_pooled = adj_pooled.float()
             adj_sq = torch.bmm(adj_pooled, adj_pooled)
             adj_pooled = (adj_pooled + adj_sq).clamp(0, 1)
             return adj_pooled

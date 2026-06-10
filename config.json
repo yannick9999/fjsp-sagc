@@ -1,7 +1,7 @@
 {
   "env_paras": {
-    "num_jobs": 10,
-    "num_mas": 5,
+    "num_jobs": 20,
+    "num_mas": 10,
     "batch_size": 20,
     "ope_feat_dim": 8,
     "ma_feat_dim": 5,
@@ -22,7 +22,7 @@
     "n_hidden_critic": 3,
     "action_dim": 1,
     "pooling": {
-        "method": "topk",
+        "method": "none",
         "ratio": 0.5,
         "num_layers": 1
     }
@@ -36,7 +36,7 @@
     "A_coeff": 1.0,
     "vf_coeff": 0.5,
     "entropy_coeff": 0.01,
-    "max_iterations": 30,
+    "max_iterations": 1000,
     "save_timestep": 10,
     "update_timestep": 1,
     "viz": true,
