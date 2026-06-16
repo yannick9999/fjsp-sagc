@@ -112,17 +112,18 @@ class GraphUNet(nn.Module):
 
     def forward(self, raw_opes, raw_mas, proc_time,
                 ope_ma_adj, ope_pre_adj, ope_sub_adj,
-                nums_opes, eligible_opes):
+                nums_opes, opes_appertain, eligible_opes):
         '''
         All inputs already indexed to the active batch.
-            raw_opes    [B, N, in_size_ope]
-            raw_mas     [B, M, in_size_ma]
-            proc_time   [B, N, M]
-            ope_ma_adj  [B, N, M]
-            ope_pre_adj [B, N, N]
-            ope_sub_adj [B, N, N]
-            nums_opes   [B]
-            eligible_opes [B, N] bool, True = must not be pooled
+            raw_opes       [B, N, in_size_ope]
+            raw_mas        [B, M, in_size_ma]
+            proc_time      [B, N, M]
+            ope_ma_adj     [B, N, M]
+            ope_pre_adj    [B, N, N]
+            ope_sub_adj    [B, N, N]
+            nums_opes      [B]
+            opes_appertain [B, N] job index per operation
+            eligible_opes  [B, N] bool, True = must not be pooled
         Returns:
             h_opes [B, N, out_size_ope]
             h_mas  [B, M, out_size_ma]
@@ -142,7 +143,7 @@ class GraphUNet(nn.Module):
         # pool operations, machines untouched
         h_opes_p, pre_p, sub_p, ma_p, proc_p, info = self.pool(
             h_opes, ope_pre_adj, ope_sub_adj, ope_ma_adj, proc_time,
-            nums_opes, eligible_opes)
+            nums_opes, opes_appertain, eligible_opes)
 
         # bottleneck at coarse resolution, machine embedding recomputed here
         h_opes_b, h_mas_b = self.btn(h_opes_p, h_mas, proc_p,

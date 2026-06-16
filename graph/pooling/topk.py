@@ -20,22 +20,56 @@ class TopKPool(nn.Module):
         self.proj = nn.Linear(in_feats, 1, bias=False)
         nn.init.xavier_uniform_(self.proj.weight)
 
+    def _build_chain_adj(self, top_idx, opes_appertain):
+        """
+        Rebuild predecessor and successor adjacency by connecting consecutive
+        kept operations that belong to the same job.
+
+        Inputs:
+            top_idx        (Tensor): kept indices sorted ascending, shape [B, k]
+            opes_appertain (Tensor): job index per operation, shape [B, N]
+
+        Outputs:
+            pre_adj (Tensor): shape [B, k, k], pre_adj[b, i, j] = 1 iff position j
+                              is the immediate kept predecessor of position i
+                              within the same job
+            sub_adj (Tensor): transpose of pre_adj
+        """
+        B, k = top_idx.shape
+        device = top_idx.device
+
+        # job id of each kept operation
+        kept_jobs = opes_appertain.gather(1, top_idx)          # [B, k]
+
+        # consecutive kept positions in same job
+        same_job = (kept_jobs[:, 1:] == kept_jobs[:, :-1])     # [B, k-1]
+
+        # edge i -> i+1 in the sorted kept order
+        sub_adj = torch.zeros(B, k, k, device=device)
+        rows = torch.arange(k - 1, device=device)
+        cols = rows + 1
+        sub_adj[:, rows, cols] = same_job.float()
+
+        pre_adj = sub_adj.transpose(1, 2).contiguous()
+        return pre_adj, sub_adj
+
     def forward(self, h, ope_pre_adj, ope_sub_adj, ope_ma_adj, proc_time,
-                nums_opes, eligible_opes=None):
+                nums_opes, opes_appertain, eligible_opes=None):
         """
         Inputs:
-            h             (Tensor): node embeddings, shape [B, N, d]
-            ope_pre_adj   (Tensor): predecessor adjacency, directed, shape [B, N, N]
-            ope_sub_adj   (Tensor): successor adjacency, directed, shape [B, N, N]
-            ope_ma_adj    (Tensor): operation-machine adjacency, bipartite, shape [B, N, M]
-            proc_time     (Tensor): edge features, shape [B, N, M]
-            nums_opes     (Tensor): number of real operations per instance, shape [B]
-            eligible_opes (Tensor): optional bool mask, shape [B, N], True = node must not be pooled
+            h              (Tensor): node embeddings, shape [B, N, d]
+            ope_pre_adj    (Tensor): predecessor adjacency, directed, shape [B, N, N]
+            ope_sub_adj    (Tensor): successor adjacency, directed, shape [B, N, N]
+            ope_ma_adj     (Tensor): operation-machine adjacency, bipartite, shape [B, N, M]
+            proc_time      (Tensor): edge features, shape [B, N, M]
+            nums_opes      (Tensor): number of real operations per instance, shape [B]
+            opes_appertain (Tensor): job index per operation, shape [B, N]
+            eligible_opes  (Tensor): optional bool mask, shape [B, N], True = node must not be pooled
 
         Outputs:
             h_pooled      (Tensor): pooled embeddings, shape [B, k, d]
-            pre_pooled    (Tensor): pooled predecessor adjacency with graph power, shape [B, k, k]
-            sub_pooled    (Tensor): pooled successor adjacency with graph power, shape [B, k, k]
+            pre_pooled    (Tensor): pooled predecessor adjacency via chain reconstruction, shape [B, k, k]
+            sub_pooled    (Tensor): pooled successor adjacency via chain reconstruction, shape [B, k, k]
             ope_ma_pooled (Tensor): pooled operation-machine adjacency, row reduction only, shape [B, k, M]
             proc_pooled   (Tensor): pooled edge features, row reduction only, shape [B, k, M]
             pool_info     (dict):   keys: top_idx, gate, original_size
@@ -67,27 +101,13 @@ class TopKPool(nn.Module):
         h_pooled = h.gather(1, idx_expand)                     # [B, k, d]
         h_pooled = h_pooled * gate.unsqueeze(-1)
 
-        def _pool_square(adj):
-            # reduce adjacency matrix to selected nodes by filtering rows then columns
-            idx_row = top_idx.unsqueeze(-1).expand(-1, -1, N)      # [B, k, N]
-            adj_pooled = adj.gather(1, idx_row)                    # [B, k, N]
-            idx_col = top_idx.unsqueeze(1).expand(-1, k, -1)       # [B, k, k]
-            adj_pooled = adj_pooled.gather(2, idx_col)             # [B, k, k]
-
-            # A + A^2 reconnects nodes that had a path through a removed node
-            adj_pooled = adj_pooled.float()
-            adj_sq = torch.bmm(adj_pooled, adj_pooled)
-            adj_pooled = (adj_pooled + adj_sq).clamp(0, 1)
-            return adj_pooled
-
         def _pool_rows(mat):
             # bipartite matrices only need row reduction, columns (machines) are unchanged
             M = mat.shape[-1]
             idx_row = top_idx.unsqueeze(-1).expand(-1, -1, M)  # [B, k, M]
             return mat.gather(1, idx_row)                       # [B, k, M]
 
-        pre_pooled = _pool_square(ope_pre_adj)
-        sub_pooled = _pool_square(ope_sub_adj)
+        pre_pooled, sub_pooled = self._build_chain_adj(top_idx, opes_appertain)
         ope_ma_pooled = _pool_rows(ope_ma_adj)
         proc_pooled = _pool_rows(proc_time)
 

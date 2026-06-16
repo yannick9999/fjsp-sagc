@@ -20,6 +20,7 @@ class Memory:
         self.ope_ma_adj = []
         self.ope_pre_adj = []
         self.ope_sub_adj = []
+        self.opes_appertain = []
         self.batch_idxes = []
         self.raw_opes = []
         self.raw_mas = []
@@ -39,6 +40,7 @@ class Memory:
         del self.ope_ma_adj[:]
         del self.ope_pre_adj[:]
         del self.ope_sub_adj[:]
+        del self.opes_appertain[:]
         del self.batch_idxes[:]
         del self.raw_opes[:]
         del self.raw_mas[:]
@@ -202,7 +204,8 @@ class HGNNScheduler(nn.Module):
         return ((raw_opes - mean_opes) / (std_opes + 1e-5), (raw_mas - mean_mas) / (std_mas + 1e-5),
                 proc_time_norm)
 
-    def embed(self, ope_ma_adj, ope_pre_adj, ope_sub_adj, features, nums_opes, eligible_opes):
+    def embed(self, ope_ma_adj, ope_pre_adj, ope_sub_adj, features, nums_opes,
+              opes_appertain, eligible_opes):
         '''
         All inputs already indexed to the active batch.
         features = (raw_opes, raw_mas, proc_time)
@@ -214,7 +217,7 @@ class HGNNScheduler(nn.Module):
         if self.coarsening != "none":
             return self.graph_unet(features[0], features[1], features[2],
                                    ope_ma_adj, ope_pre_adj, ope_sub_adj,
-                                   nums_opes, eligible_opes)
+                                   nums_opes, opes_appertain, eligible_opes)
 
         # Song's baseline, L iterations of the HGNN
         for i in range(len(self.num_heads)):
@@ -254,7 +257,9 @@ class HGNNScheduler(nn.Module):
         eligible_opes = torch.zeros(batch_idxes.size(0), N, dtype=torch.bool, device=features[0].device)
         eligible_opes.scatter_(1, ope_step_batch[batch_idxes], True)
 
-        h_opes, h_mas = self.embed(ope_ma_adj, ope_pre_adj, ope_sub_adj, features, nums_opes, eligible_opes)
+        opes_appertain = state.opes_appertain_batch[batch_idxes]
+        h_opes, h_mas = self.embed(ope_ma_adj, ope_pre_adj, ope_sub_adj, features, nums_opes,
+                                   opes_appertain, eligible_opes)
 
         # Stacking and pooling
         h_mas_pooled = h_mas.mean(dim=-2)  # shape: [len(batch_idxes), out_size_ma]
@@ -314,6 +319,8 @@ class HGNNScheduler(nn.Module):
             memories.nums_opes.append(copy.deepcopy(nums_opes))
             memories.jobs_gather.append(copy.deepcopy(jobs_gather))
             memories.eligible.append(copy.deepcopy(eligible))
+            memories.opes_appertain.append(copy.deepcopy(
+                state.opes_appertain_batch[batch_idxes]))
 
         return action_probs, ope_step_batch, h_pooled
 
@@ -343,7 +350,7 @@ class HGNNScheduler(nn.Module):
         return torch.stack((opes, mas, jobs), dim=1).t()
 
     def evaluate(self, ope_ma_adj, ope_pre_adj, ope_sub_adj, raw_opes, raw_mas, proc_time,
-                 jobs_gather, eligible, nums_opes, action_envs, flag_sample=False):
+                 jobs_gather, eligible, nums_opes, opes_appertain, action_envs, flag_sample=False):
         features = (raw_opes, raw_mas, proc_time)
 
         ope_step = jobs_gather[..., 0]                       # [B, num_jobs]
@@ -352,7 +359,7 @@ class HGNNScheduler(nn.Module):
         eligible_opes.scatter_(1, ope_step, True)
 
         h_opes, h_mas = self.embed(ope_ma_adj, ope_pre_adj, ope_sub_adj,
-                                   features, nums_opes, eligible_opes)
+                                   features, nums_opes, opes_appertain, eligible_opes)
 
         # Stacking and pooling
         h_mas_pooled = h_mas.mean(dim=-2)
@@ -412,6 +419,7 @@ class PPO:
         old_jobs_gather = torch.stack(memory.jobs_gather, dim=0).transpose(0, 1).flatten(0, 1)
         old_eligible = torch.stack(memory.eligible, dim=0).transpose(0, 1).flatten(0, 1)
         old_nums_opes = torch.stack(memory.nums_opes, dim=0).transpose(0, 1).flatten(0, 1)
+        old_opes_appertain = torch.stack(memory.opes_appertain, dim=0).transpose(0, 1).flatten(0, 1)
         memory_rewards = torch.stack(memory.rewards, dim=0).transpose(0,1)
         memory_is_terminals = torch.stack(memory.is_terminals, dim=0).transpose(0,1)
         old_logprobs = torch.stack(memory.logprobs, dim=0).transpose(0,1).flatten(0,1)
@@ -457,6 +465,7 @@ class PPO:
                                          old_jobs_gather[start_idx: end_idx, :, :],
                                          old_eligible[start_idx: end_idx, :, :],
                                          old_nums_opes[start_idx: end_idx],
+                                         old_opes_appertain[start_idx: end_idx, :],
                                          old_action_envs[start_idx: end_idx])
 
                 ratios = torch.exp(logprobs - old_logprobs[i*minibatch_size:(i+1)*minibatch_size].detach())
