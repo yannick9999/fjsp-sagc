@@ -111,10 +111,20 @@ class TopKPool(nn.Module):
         ope_ma_pooled = _pool_rows(ope_ma_adj)
         proc_pooled = _pool_rows(proc_time)
 
+        nums_opes_pooled = torch.full((B,), k, dtype=nums_opes.dtype, device=h.device)
+        opes_appertain_pooled = opes_appertain.gather(1, top_idx)
+        if eligible_opes is not None:
+            eligible_opes_pooled = eligible_opes.gather(1, top_idx)
+        else:
+            eligible_opes_pooled = None
+
         pool_info = {
-            "top_idx":       top_idx,   # [B, k]
-            "gate":          gate,      # [B, k]
-            "original_size": N,
+            "top_idx":               top_idx,               # [B, k]
+            "gate":                  gate,                   # [B, k]
+            "original_size":         N,
+            "nums_opes_pooled":      nums_opes_pooled,       # [B]
+            "opes_appertain_pooled": opes_appertain_pooled,  # [B, k]
+            "eligible_opes_pooled":  eligible_opes_pooled,   # [B, k] or None
         }
 
         return h_pooled, pre_pooled, sub_pooled, ope_ma_pooled, proc_pooled, pool_info
