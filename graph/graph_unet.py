@@ -1,3 +1,5 @@
+import time
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -110,6 +112,27 @@ class GraphUNet(nn.Module):
         self.dec = GCNBlock(d_ope, d_ma, d_ope, d_ma,
                             hidden_size_ope, num_head, dropout)
 
+        # coarsening overhead timing, disabled by default so training is unaffected
+        self._timing_enabled = False
+        self._t_coarse_total = 0.0
+        self._t_forward_total = 0.0
+        self._n_calls = 0
+
+    def reset_timing(self):
+        self._t_coarse_total = 0.0
+        self._t_forward_total = 0.0
+        self._n_calls = 0
+
+    def get_timing_stats(self):
+        if self._n_calls == 0:
+            return {"avg_coarse_ms": 0.0, "avg_forward_ms": 0.0, "overhead_pct": 0.0}
+        avg_coarse_ms = self._t_coarse_total / self._n_calls * 1000
+        avg_forward_ms = self._t_forward_total / self._n_calls * 1000
+        overhead_pct = (self._t_coarse_total / self._t_forward_total * 100
+                        if self._t_forward_total > 0 else 0.0)
+        return {"avg_coarse_ms": avg_coarse_ms, "avg_forward_ms": avg_forward_ms,
+                "overhead_pct": overhead_pct}
+
     def forward(self, raw_opes, raw_mas, proc_time,
                 ope_ma_adj, ope_pre_adj, ope_sub_adj,
                 nums_opes, opes_appertain, eligible_opes):
@@ -131,6 +154,12 @@ class GraphUNet(nn.Module):
         B = raw_opes.size(0)
         batch_idxes = torch.arange(B, device=raw_opes.device)
 
+        if self._timing_enabled:
+            _is_cuda = raw_opes.device.type == 'cuda'
+            if _is_cuda:
+                torch.cuda.synchronize()
+            _t_fwd_start = time.perf_counter()
+
         # encoder
         h_opes, h_mas = self.enc(raw_opes, raw_mas, proc_time,
                                  ope_ma_adj, ope_pre_adj, ope_sub_adj, batch_idxes)
@@ -140,20 +169,48 @@ class GraphUNet(nn.Module):
         skip_pre, skip_sub = ope_pre_adj, ope_sub_adj
         skip_ma, skip_proc = ope_ma_adj, proc_time
 
+        if self._timing_enabled:
+            if _is_cuda:
+                torch.cuda.synchronize()
+            _t_pool_start = time.perf_counter()
+
         # pool operations, machines untouched
         h_opes_p, pre_p, sub_p, ma_p, proc_p, info = self.pool(
             h_opes, ope_pre_adj, ope_sub_adj, ope_ma_adj, proc_time,
             nums_opes, opes_appertain, eligible_opes)
 
+        if self._timing_enabled:
+            if _is_cuda:
+                torch.cuda.synchronize()
+            _t_pool_end = time.perf_counter()
+
         # bottleneck at coarse resolution, machine embedding recomputed here
         h_opes_b, h_mas_b = self.btn(h_opes_p, h_mas, proc_p,
                                      ma_p, pre_p, sub_p, batch_idxes)
 
+        if self._timing_enabled:
+            if _is_cuda:
+                torch.cuda.synchronize()
+            _t_unpool_start = time.perf_counter()
+
         # unpool back to full operation count, add skip
         h_opes_u = self.unpool(h_opes_b, info, skip_h)
+
+        if self._timing_enabled:
+            if _is_cuda:
+                torch.cuda.synchronize()
+            _t_unpool_end = time.perf_counter()
 
         # decoder at full resolution with restored adjacencies
         h_opes_out, h_mas_out = self.dec(h_opes_u, h_mas_b, skip_proc,
                                          skip_ma, skip_pre, skip_sub, batch_idxes)
+
+        if self._timing_enabled:
+            if _is_cuda:
+                torch.cuda.synchronize()
+            _t_fwd_end = time.perf_counter()
+            self._t_coarse_total += (_t_pool_end - _t_pool_start) + (_t_unpool_end - _t_unpool_start)
+            self._t_forward_total += _t_fwd_end - _t_fwd_start
+            self._n_calls += 1
 
         return h_opes_out, h_mas_out

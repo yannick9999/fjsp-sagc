@@ -42,6 +42,9 @@ def main():
         torch.set_default_dtype(torch.float32)
     print("PyTorch device: ", device.type)
     torch.set_printoptions(precision=None, threshold=np.inf, edgeitems=None, linewidth=None, profile=None, sci_mode=False)
+    # peak GPU memory
+    if device.type == 'cuda':
+        torch.cuda.reset_peak_memory_stats(device)
 
     # Load config and init objects
     with open("./config.json", 'r') as load_f:
@@ -71,6 +74,12 @@ def main():
     model = PPO_model.PPO(model_paras, train_paras)
     rules = test_paras["rules"]
     envs = []  # Store multiple environments
+    # coarsening overhead + peak GPU memory setup
+    has_graph_unet = hasattr(model.policy_old, 'graph_unet')
+    if has_graph_unet:
+        model.policy_old.graph_unet._timing_enabled = True
+    coarsening_rows = []
+    peak_rows = []
 
     # Detect and add models to "rules"
     if "DRL" in rules:
@@ -113,6 +122,8 @@ def main():
         step_time_last = time.time()
         makespans = []
         times = []
+        if device.type == 'cuda':
+            torch.cuda.reset_peak_memory_stats(device)
         for i_ins in range(num_ins):
             test_file = data_path + test_files[i_ins]
             with open(test_file) as file_object:
@@ -142,6 +153,8 @@ def main():
                 print("Create env[{0}]".format(i_ins))
 
             # Schedule an instance/environment
+            if has_graph_unet:
+                model.policy_old.graph_unet.reset_timing()
             # DRL-S
             if test_paras["sample"]:
                 makespan, time_re = schedule(env, model, memories, flag_sample=test_paras["sample"])
@@ -158,6 +171,20 @@ def main():
                     env.reset()
                 makespans.append(torch.mean(torch.tensor(makespan_s)))
                 times.append(torch.mean(torch.tensor(time_s)))
+            if has_graph_unet:
+                _stats = model.policy_old.graph_unet.get_timing_stats()
+                _n_dec = model.policy_old.graph_unet._n_calls
+            else:
+                _stats = {"avg_coarse_ms": 0.0, "avg_forward_ms": 0.0, "overhead_pct": 0.0}
+                _n_dec = 0
+            coarsening_rows.append({
+                "file_name": test_files[i_ins],
+                "rule": rule,
+                "avg_coarse_ms": _stats["avg_coarse_ms"],
+                "avg_forward_ms": _stats["avg_forward_ms"],
+                "overhead_pct": _stats["overhead_pct"],
+                "n_decisions": _n_dec,
+            })
             elapsed = time.time() - start
             completed = i_rules * num_ins + i_ins + 1
             total_to_do = len(rules) * num_ins
@@ -176,9 +203,26 @@ def main():
 
         for env in envs:
             env.reset()
+        if device.type == 'cuda':
+            _peak_bytes = torch.cuda.max_memory_allocated(device)
+            _peak_str = '{:.4f}'.format(_peak_bytes / (1024 ** 3))
+        else:
+            _peak_str = 'N/A'
+        peak_rows.append({"rule": rule, "peak_gb": _peak_str})
 
     writer.close()
     writer_time.close()
+
+    # coarsening overhead per file and rule
+    pd.DataFrame(coarsening_rows).to_excel(
+        '{0}/coarsening_overhead_{1}.xlsx'.format(save_path, str_time), index=False)
+
+    # peak GPU memory per rule
+    with open('{0}/peak_memory_{1}.txt'.format(save_path, str_time), 'w') as f:
+        f.write('rule\tpeak_gb\n')
+        for _row in peak_rows:
+            f.write('{0}\t{1}\n'.format(_row['rule'], _row['peak_gb']))
+    # --- end new ---
 
     print("total_spend_time: ", time.time() - start)
 

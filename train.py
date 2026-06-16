@@ -35,6 +35,8 @@ def main():
         torch.set_default_dtype(torch.float32)
     print("PyTorch device: ", device.type)
     torch.set_printoptions(precision=None, threshold=np.inf, edgeitems=None, linewidth=None, profile=None, sci_mode=False)
+    if device.type == 'cuda':
+        torch.cuda.reset_peak_memory_stats(device)
 
     # Load config and init objects
     with open("./config.json", 'r') as load_f:
@@ -91,6 +93,9 @@ def main():
     # Start training iteration
     start_time = time.time()
     env = None
+    # sample efficiency: cumulative env steps and corresponding validation makespans
+    total_env_steps = 0
+    env_steps_at_valid = []
     for i in range(1, train_paras["max_iterations"]+1):
         # Replace training instances every x iteration (x = 20 in paper)
         if (i - 1) % train_paras["parallel_iter"] == 0:
@@ -107,6 +112,7 @@ def main():
         last_time = time.time()
 
         # Schedule in parallel
+        steps_this_episode = 0
         while ~done:
             with torch.no_grad():
                 actions = model.policy_old.act(state, memories, dones)
@@ -114,7 +120,9 @@ def main():
             done = dones.all()
             memories.rewards.append(rewards)
             memories.is_terminals.append(dones)
+            steps_this_episode += 1
             # gpu_tracker.track()  # Used to monitor memory (of gpu)
+        total_env_steps += env_paras["batch_size"] * steps_this_episode
         print("spend_time: ", time.time()-last_time)
 
         # Verify the solution
@@ -152,6 +160,7 @@ def main():
             vali_result, vali_result_100 = validate(env_valid_paras, env_valid, model.policy_old)
             valid_results.append(vali_result.item())
             valid_results_100.append(vali_result_100)
+            env_steps_at_valid.append(total_env_steps)
 
             # Save the best model
             if vali_result < makespan_best:
@@ -179,6 +188,19 @@ def main():
     data.to_excel(writer_100, sheet_name='Sheet1', index=False, startcol=1)
 
     writer_100.close()
+
+    # sample efficiency: env steps vs. validation makespan curve
+    data_se = pd.DataFrame({"env_steps": env_steps_at_valid, "makespan_avg": valid_results})
+    data_se.to_excel('{0}/sample_efficiency_{1}.xlsx'.format(save_path, str_time), index=False)
+
+    # peak GPU memory over the full training run
+    if device.type == 'cuda':
+        peak_bytes = torch.cuda.max_memory_allocated(device)
+        peak_str = '{:.4f}'.format(peak_bytes / (1024 ** 3))
+    else:
+        peak_str = 'N/A'
+    with open('{0}/peak_memory_{1}.txt'.format(save_path, str_time), 'w') as f:
+        f.write(peak_str)
 
     if is_viz:
         fig.savefig('{0}/training_plot_{1}.png'.format(save_path, str_time))
