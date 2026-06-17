@@ -75,27 +75,21 @@ def main():
         viz_x_loss, viz_y_loss = [], []
         viz_x_makespan, viz_y_makespan = [], []
 
-    # Generate data files and fill in the header
+    # Output paths
     str_time = time.strftime("%Y%m%d_%H%M%S", time.localtime(time.time()))
     save_path = './save/train_{0}'.format(str_time)
     os.makedirs(save_path)
-    # Training curve storage path (average of validation set)
-    writer_ave = pd.ExcelWriter('{0}/training_ave_{1}.xlsx'.format(save_path, str_time))
-    # Training curve storage path (value of each validating instance)
-    writer_100 = pd.ExcelWriter('{0}/training_100_{1}.xlsx'.format(save_path, str_time))
+
+    # Accumulators for validation results
+    valid_iterations = []
     valid_results = []
     valid_results_100 = []
-    data_file = pd.DataFrame(np.arange(10, 1010, 10), columns=["iterations"])
-    data_file.to_excel(writer_ave, sheet_name='Sheet1', index=False)
-    data_file = pd.DataFrame(np.arange(10, 1010, 10), columns=["iterations"])
-    data_file.to_excel(writer_100, sheet_name='Sheet1', index=False)
+    total_env_steps = 0
+    env_steps_at_valid = []
 
     # Start training iteration
     start_time = time.time()
     env = None
-    # sample efficiency: cumulative env steps and corresponding validation makespans
-    total_env_steps = 0
-    env_steps_at_valid = []
     for i in range(1, train_paras["max_iterations"]+1):
         # Replace training instances every x iteration (x = 20 in paper)
         if (i - 1) % train_paras["parallel_iter"] == 0:
@@ -158,6 +152,7 @@ def main():
             print('Start validating')
             # Record the average results and the results on each instance
             vali_result, vali_result_100 = validate(env_valid_paras, env_valid, model.policy_old)
+            valid_iterations.append(i)
             valid_results.append(vali_result.item())
             valid_results_100.append(vali_result_100)
             env_steps_at_valid.append(total_env_steps)
@@ -178,36 +173,59 @@ def main():
                 ax_makespan.plot(viz_x_makespan, viz_y_makespan)
                 plt.tight_layout(); plt.pause(0.001)
 
-    # Save the data of training curve to files
-    data = pd.DataFrame(np.array(valid_results).transpose(), columns=["res"])
-    data.to_excel(writer_ave, sheet_name='Sheet1', index=False, startcol=1)
+    total_runtime_sec = time.time() - start_time
 
-    writer_ave.close()
-    column = [i_col for i_col in range(100)]
-    data = pd.DataFrame(torch.stack(valid_results_100, dim=0).to('cpu').numpy(), columns=column)
-    data.to_excel(writer_100, sheet_name='Sheet1', index=False, startcol=1)
-
-    writer_100.close()
-
-    # sample efficiency: env steps vs. validation makespan curve
-    data_se = pd.DataFrame({"env_steps": env_steps_at_valid, "makespan_avg": valid_results})
-    data_se.to_excel('{0}/sample_efficiency_{1}.xlsx'.format(save_path, str_time), index=False)
-
-    # peak GPU memory over the full training run
+    # Peak GPU memory over the full training run
     if device.type == 'cuda':
         peak_bytes = torch.cuda.max_memory_allocated(device)
-        peak_str = '{:.4f}'.format(peak_bytes / (1024 ** 3))
+        peak_gpu_gb = '{:.4f}'.format(peak_bytes / (1024 ** 3))
     else:
-        peak_str = 'N/A'
-    with open('{0}/peak_memory_{1}.txt'.format(save_path, str_time), 'w') as f:
-        f.write(peak_str)
+        peak_gpu_gb = 'N/A'
+
+    # Build DataFrames for the three sheets
+    df_curve = pd.DataFrame({
+        'iteration': valid_iterations,
+        'env_steps': env_steps_at_valid,
+        'makespan_avg': valid_results,
+    })
+
+    per_inst_array = torch.stack(valid_results_100, dim=0).to('cpu').numpy()
+    num_val_instances = per_inst_array.shape[1]
+    df_per_inst = pd.DataFrame(
+        per_inst_array,
+        columns=[f'inst_{j}' for j in range(num_val_instances)],
+    )
+    df_per_inst.insert(0, 'iteration', valid_iterations)
+
+    pooling_cfg = model_paras.get("pooling", {})
+    metadata = [
+        ("timestamp",       str_time),
+        ("method",          str(pooling_cfg.get("method", ""))),
+        ("num_pool_layers", str(pooling_cfg.get("num_layers", ""))),
+        ("pool_ratio",      str(pooling_cfg.get("ratio", ""))),
+        ("num_jobs",        str(env_paras["num_jobs"])),
+        ("num_mas",         str(env_paras["num_mas"])),
+        ("batch_size",      str(env_paras["batch_size"])),
+        ("max_iterations",  str(train_paras["max_iterations"])),
+        ("device",          device.type),
+        ("peak_gpu_gb",     peak_gpu_gb),
+        ("total_runtime_sec", str(round(total_runtime_sec, 2))),
+    ]
+    df_meta = pd.DataFrame(metadata, columns=["key", "value"])
+
+    # Write all sheets into a single Excel file
+    out_path = '{0}/train_results_{1}.xlsx'.format(save_path, str_time)
+    with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
+        df_curve.to_excel(writer, sheet_name='validation_curve', index=False)
+        df_per_inst.to_excel(writer, sheet_name='validation_per_instance', index=False)
+        df_meta.to_excel(writer, sheet_name='run_metadata', index=False)
 
     if is_viz:
         fig.savefig('{0}/training_plot_{1}.png'.format(save_path, str_time))
         plt.ioff()
         plt.close()
 
-    print("total_time: ", time.time() - start_time)
+    print("total_time: ", total_runtime_sec)
 
 if __name__ == '__main__':
     main()

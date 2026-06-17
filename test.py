@@ -79,7 +79,6 @@ def main():
     if has_graph_unet:
         model.policy_old.graph_unet._timing_enabled = True
     coarsening_rows = []
-    peak_rows = []
 
     # Detect and add models to "rules"
     if "DRL" in rules:
@@ -91,17 +90,16 @@ def main():
         if "DRL" in rules:
             rules.remove("DRL")
 
-    # Generate data files and fill in the header
+    # Output paths
     str_time = time.strftime("%Y%m%d_%H%M%S", time.localtime(time.time()))
     save_path = './save/test_{0}'.format(str_time)
     os.makedirs(save_path)
-    writer = pd.ExcelWriter(
-        '{0}/makespan_{1}.xlsx'.format(save_path, str_time))  # Makespan data storage path
-    writer_time = pd.ExcelWriter('{0}/time_{1}.xlsx'.format(save_path, str_time))  # time data storage path
-    file_name = [test_files[i] for i in range(num_ins)]
-    data_file = pd.DataFrame(file_name, columns=["file_name"])
-    data_file.to_excel(writer, sheet_name='Sheet1', index=False)
-    data_file.to_excel(writer_time, sheet_name='Sheet1', index=False)
+
+    file_name_col = [test_files[i] for i in range(num_ins)]
+
+    # Accumulators: dict of rule -> list of values (one per instance)
+    makespan_by_rule = {}
+    time_by_rule = {}
 
     # Rule-by-rule (model-by-model) testing
     start = time.time()
@@ -158,7 +156,7 @@ def main():
             # DRL-S
             if test_paras["sample"]:
                 makespan, time_re = schedule(env, model, memories, flag_sample=test_paras["sample"])
-                makespans.append(torch.min(makespan))
+                makespans.append(torch.min(makespan).item())
                 times.append(time_re)
             # DRL-G
             else:
@@ -169,8 +167,8 @@ def main():
                     makespan_s.append(makespan)
                     time_s.append(time_re)
                     env.reset()
-                makespans.append(torch.mean(torch.tensor(makespan_s)))
-                times.append(torch.mean(torch.tensor(time_s)))
+                makespans.append(torch.mean(torch.tensor(makespan_s)).item())
+                times.append(torch.mean(torch.tensor(time_s)).item())
             if has_graph_unet:
                 _stats = model.policy_old.graph_unet.get_timing_stats()
                 _n_dec = model.policy_old.graph_unet._n_calls
@@ -195,36 +193,59 @@ def main():
                 i_ins, format_time(elapsed), format_time(estimated_total), format_time(remaining)))
         print("rule_spend_time: ", time.time() - step_time_last)
 
-        # Save makespan and time data to files
-        data = pd.DataFrame(torch.tensor(makespans).t().tolist(), columns=[rule])
-        data.to_excel(writer, sheet_name='Sheet1', index=False, startcol=i_rules + 1)
-        data = pd.DataFrame(torch.tensor(times).t().tolist(), columns=[rule])
-        data.to_excel(writer_time, sheet_name='Sheet1', index=False, startcol=i_rules + 1)
+        makespan_by_rule[rule] = makespans
+        time_by_rule[rule] = times
 
         for env in envs:
             env.reset()
-        if device.type == 'cuda':
-            _peak_bytes = torch.cuda.max_memory_allocated(device)
-            _peak_str = '{:.4f}'.format(_peak_bytes / (1024 ** 3))
-        else:
-            _peak_str = 'N/A'
-        peak_rows.append({"rule": rule, "peak_gb": _peak_str})
 
-    writer.close()
-    writer_time.close()
+    total_runtime_sec = time.time() - start
 
-    # coarsening overhead per file and rule
-    pd.DataFrame(coarsening_rows).to_excel(
-        '{0}/coarsening_overhead_{1}.xlsx'.format(save_path, str_time), index=False)
+    # Peak GPU memory over the full test run
+    if device.type == 'cuda':
+        peak_bytes = torch.cuda.max_memory_allocated(device)
+        peak_gpu_gb = '{:.4f}'.format(peak_bytes / (1024 ** 3))
+    else:
+        peak_gpu_gb = 'N/A'
 
-    # peak GPU memory per rule
-    with open('{0}/peak_memory_{1}.txt'.format(save_path, str_time), 'w') as f:
-        f.write('rule\tpeak_gb\n')
-        for _row in peak_rows:
-            f.write('{0}\t{1}\n'.format(_row['rule'], _row['peak_gb']))
-    # --- end new ---
+    # Build DataFrames for the four sheets
+    df_makespan = pd.DataFrame({"file_name": file_name_col})
+    for rule in rules:
+        df_makespan[rule] = makespan_by_rule[rule]
 
-    print("total_spend_time: ", time.time() - start)
+    df_time = pd.DataFrame({"file_name": file_name_col})
+    for rule in rules:
+        df_time[rule] = time_by_rule[rule]
+
+    df_coarsening = pd.DataFrame(coarsening_rows)
+
+    pooling_cfg = model_paras.get("pooling", {})
+    metadata = [
+        ("timestamp",       str_time),
+        ("method",          str(pooling_cfg.get("method", ""))),
+        ("num_pool_layers", str(pooling_cfg.get("num_layers", ""))),
+        ("pool_ratio",      str(pooling_cfg.get("ratio", ""))),
+        ("num_jobs",        str(env_paras["num_jobs"])),
+        ("num_mas",         str(env_paras["num_mas"])),
+        ("data_path",       str(test_paras["data_path"])),
+        ("num_ins",         str(test_paras["num_ins"])),
+        ("sample",          str(test_paras["sample"])),
+        ("num_sample",      str(test_paras["num_sample"]) if test_paras["sample"] else ""),
+        ("device",          device.type),
+        ("peak_gpu_gb",     peak_gpu_gb),
+        ("total_runtime_sec", str(round(total_runtime_sec, 2))),
+    ]
+    df_meta = pd.DataFrame(metadata, columns=["key", "value"])
+
+    # Write all sheets into a single Excel file
+    out_path = '{0}/test_results_{1}.xlsx'.format(save_path, str_time)
+    with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
+        df_makespan.to_excel(writer, sheet_name='makespan', index=False)
+        df_time.to_excel(writer, sheet_name='solve_time', index=False)
+        df_coarsening.to_excel(writer, sheet_name='coarsening_overhead', index=False)
+        df_meta.to_excel(writer, sheet_name='run_metadata', index=False)
+
+    print("total_spend_time: ", total_runtime_sec)
 
 def schedule(env, model, memories, flag_sample=False):
     # Get state and completion signal
