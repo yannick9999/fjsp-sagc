@@ -253,9 +253,26 @@ class HGNNScheduler(nn.Module):
         # Derive eligible_opes from the current step of each job
         ope_step_batch = torch.where(state.ope_step_batch > state.end_ope_biases_batch,
                                      state.end_ope_biases_batch, state.ope_step_batch)
+
+        # Compute full eligibility before embedding so it can serve as a protection mask
+        num_jobs = ope_step_batch.size(1)
+        num_mas = state.ope_ma_adj_batch.size(-1)
+        # shape: [len(batch_idxes), num_jobs, num_mas]
+        eligible_proc = state.ope_ma_adj_batch[batch_idxes].gather(1,
+                          ope_step_batch[..., :, None].expand(-1, -1, num_mas)[batch_idxes])
+        # shape: [len(batch_idxes), num_jobs, num_mas]
+        ma_eligible = ~state.mask_ma_procing_batch[batch_idxes].unsqueeze(1).expand(-1, num_jobs, num_mas)
+        # shape: [len(batch_idxes), num_jobs, num_mas]
+        job_eligible = ~(state.mask_job_procing_batch[batch_idxes] +
+                         state.mask_job_finish_batch[batch_idxes])[:, :, None].expand(-1, -1, num_mas)
+        # shape: [len(batch_idxes), num_jobs, num_mas]
+        eligible = job_eligible & ma_eligible & (eligible_proc == 1)
+
+        # A job is only eligible if at least one (job, machine) pair is valid
+        job_truly_eligible = eligible.any(dim=-1)  # [B, num_jobs]
         N = features[0].size(1)
         eligible_opes = torch.zeros(batch_idxes.size(0), N, dtype=torch.bool, device=features[0].device)
-        eligible_opes.scatter_(1, ope_step_batch[batch_idxes], True)
+        eligible_opes.scatter_(1, ope_step_batch[batch_idxes], job_truly_eligible)
 
         opes_appertain = state.opes_appertain_batch[batch_idxes]
         h_opes, h_mas = self.embed(ope_ma_adj, ope_pre_adj, ope_sub_adj, features, nums_opes,
@@ -275,23 +292,10 @@ class HGNNScheduler(nn.Module):
         # Detect eligible O-M pairs (eligible actions) and generate tensors for actor calculation
         jobs_gather = ope_step_batch[..., :, None].expand(-1, -1, h_opes.size(-1))[batch_idxes]
         h_jobs = h_opes.gather(1, jobs_gather)
-        # Matrix indicating whether processing is possible
-        # shape: [len(batch_idxes), num_jobs, num_mas]
-        eligible_proc = state.ope_ma_adj_batch[batch_idxes].gather(1,
-                          ope_step_batch[..., :, None].expand(-1, -1, state.ope_ma_adj_batch.size(-1))[batch_idxes])
         h_jobs_padding = h_jobs.unsqueeze(-2).expand(-1, -1, state.proc_times_batch.size(-1), -1)
         h_mas_padding = h_mas.unsqueeze(-3).expand_as(h_jobs_padding)
         h_mas_pooled_padding = h_mas_pooled[:, None, None, :].expand_as(h_jobs_padding)
         h_opes_pooled_padding = h_opes_pooled[:, None, None, :].expand_as(h_jobs_padding)
-        # Matrix indicating whether machine is eligible
-        # shape: [len(batch_idxes), num_jobs, num_mas]
-        ma_eligible = ~state.mask_ma_procing_batch[batch_idxes].unsqueeze(1).expand_as(h_jobs_padding[..., 0])
-        # Matrix indicating whether job is eligible
-        # shape: [len(batch_idxes), num_jobs, num_mas]
-        job_eligible = ~(state.mask_job_procing_batch[batch_idxes] +
-                         state.mask_job_finish_batch[batch_idxes])[:, :, None].expand_as(h_jobs_padding[..., 0])
-        # shape: [len(batch_idxes), num_jobs, num_mas]
-        eligible = job_eligible & ma_eligible & (eligible_proc == 1)
         if (~(eligible)).all():
             print("No eligible O-M pair!")
             return
@@ -355,8 +359,9 @@ class HGNNScheduler(nn.Module):
 
         ope_step = jobs_gather[..., 0]                       # [B, num_jobs]
         N = raw_opes.size(1)
+        job_truly_eligible = eligible.any(dim=-1)  # [B, num_jobs]
         eligible_opes = torch.zeros(raw_opes.size(0), N, dtype=torch.bool, device=raw_opes.device)
-        eligible_opes.scatter_(1, ope_step, True)
+        eligible_opes.scatter_(1, ope_step, job_truly_eligible)
 
         h_opes, h_mas = self.embed(ope_ma_adj, ope_pre_adj, ope_sub_adj,
                                    features, nums_opes, opes_appertain, eligible_opes)
