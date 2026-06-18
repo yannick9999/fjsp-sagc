@@ -9,14 +9,16 @@ class TopKPool(nn.Module):
     Selects the top-k nodes based on a learned projection vector p.
     """
 
-    def __init__(self, in_feats: int, ratio: float):
+    def __init__(self, in_feats: int, ratio: float, k_mode: str = "jobs"):
         """
         Inputs:
             in_feats (int):   input feature dimension d
             ratio    (float): fraction of nodes to keep
+            k_mode   (str):   'jobs' or 'ops'
         """
         super().__init__()
         self.ratio = ratio
+        self.k_mode = k_mode
         self.proj = nn.Linear(in_feats, 1, bias=False)
         nn.init.xavier_uniform_(self.proj.weight)
 
@@ -86,8 +88,16 @@ class TopKPool(nn.Module):
 
         # k must be large enough to include all protected nodes
         num_protected = int(protect_mask.sum(dim=-1).max().item())
-        k_ratio = max(1, int(self.ratio * nums_opes.min().item()))
-        k = max(num_protected, k_ratio)
+
+        if self.k_mode == "jobs":
+            num_jobs = int(opes_appertain.max().item()) + 1
+            k_target = max(1, int(self.ratio * num_jobs))
+        elif self.k_mode == "ops":
+            k_target = max(1, int(self.ratio * nums_opes.min().item()))
+        else:
+            raise ValueError(f"Unknown k_mode '{self.k_mode}'. Use 'jobs' or 'ops'.")
+
+        k = max(num_protected, k_target)
         k = min(k, int(nums_opes.min().item()))
 
         top_idx = torch.topk(sel_scores, k, dim=-1).indices   # [B, k]

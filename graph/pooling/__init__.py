@@ -28,9 +28,10 @@ def build_pooling(model_paras: dict):
 
     in_feats = model_paras["out_size_ope"]
     ratio    = cfg["ratio"]
+    k_mode   = cfg.get("k_mode", "jobs")
 
     pool_cls, _ = POOLING_REGISTRY[method]
-    return pool_cls(in_feats, ratio)
+    return pool_cls(in_feats, ratio, k_mode)
 
 
 def build_unpooling(model_paras: dict):
