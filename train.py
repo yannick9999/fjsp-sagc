@@ -165,7 +165,12 @@ def main():
                     os.remove(delete_file)
                 save_file = '{0}/save_best_{1}_{2}_{3}.pt'.format(save_path, num_jobs, num_mas, i)
                 best_models.append(save_file)
-                torch.save(model.policy.state_dict(), save_file)
+                checkpoint = {
+                    "state_dict": model.policy.state_dict(),
+                    "model_paras": {k: v for k, v in model_paras.items() if k != "device"},
+                    "env_paras": {k: v for k, v in env_paras.items() if k != "device"},
+                }
+                torch.save(checkpoint, save_file)
 
             if is_viz:
                 viz_x_makespan.append(i); viz_y_makespan.append(vali_result.item())

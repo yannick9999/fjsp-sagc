@@ -107,13 +107,32 @@ def main():
         rule = rules[i_rules]
         # Load trained model
         if rule.endswith('.pt'):
+            ckpt_path = './model/' + mod_files[i_rules]
             if device.type == 'cuda':
-                model_CKPT = torch.load('./model/' + mod_files[i_rules])
+                model_CKPT = torch.load(ckpt_path)
             else:
-                model_CKPT = torch.load('./model/' + mod_files[i_rules], map_location='cpu')
+                model_CKPT = torch.load(ckpt_path, map_location='cpu')
             print('\nloading checkpoint:', mod_files[i_rules])
-            model.policy.load_state_dict(model_CKPT)
-            model.policy_old.load_state_dict(model_CKPT)
+
+            if isinstance(model_CKPT, dict) and "state_dict" in model_CKPT:
+                state_dict = model_CKPT["state_dict"]
+                ckpt_model_paras = model_CKPT["model_paras"]
+                ckpt_model_paras["device"] = device
+                ckpt_model_paras["actor_in_dim"] = ckpt_model_paras["out_size_ma"] * 2 + ckpt_model_paras["out_size_ope"] * 2
+                ckpt_model_paras["critic_in_dim"] = ckpt_model_paras["out_size_ma"] + ckpt_model_paras["out_size_ope"]
+                model = PPO_model.PPO(ckpt_model_paras, train_paras)
+                model.policy.to(device)
+                model.policy_old.to(device)
+                if hasattr(model.policy_old, 'graph_unet'):
+                    model.policy_old.graph_unet._timing_enabled = True
+                has_graph_unet = hasattr(model.policy_old, 'graph_unet')
+                print(f"  config from checkpoint: method={ckpt_model_paras['pooling']['method']}")
+            else:
+                state_dict = model_CKPT
+                print("  WARNING: old checkpoint format, using config.json for architecture")
+
+            model.policy.load_state_dict(state_dict)
+            model.policy_old.load_state_dict(state_dict)
         print('rule:', rule)
 
         # Schedule instance by instance
