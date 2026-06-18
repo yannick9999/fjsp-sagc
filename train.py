@@ -44,6 +44,9 @@ def main():
     env_paras = load_dict["env_paras"]
     model_paras = load_dict["model_paras"]
     train_paras = load_dict["train_paras"]
+    seed = train_paras["seed"]
+    setup_seed(seed)
+    print(f"Seed: {seed}")
     env_paras["device"] = device
     model_paras["device"] = device
     env_valid_paras = copy.deepcopy(env_paras)
@@ -77,7 +80,7 @@ def main():
 
     # Output paths
     str_time = time.strftime("%Y%m%d_%H%M%S", time.localtime(time.time()))
-    save_path = './save/train_{0}'.format(str_time)
+    save_path = './save/train_{0}_seed{1}'.format(str_time, seed)
     os.makedirs(save_path)
 
     # Accumulators for validation results
@@ -205,6 +208,7 @@ def main():
     pooling_cfg = model_paras.get("pooling", {})
     metadata = [
         ("timestamp",       str_time),
+        ("seed",            str(seed)),
         ("method",          str(pooling_cfg.get("method", ""))),
         ("num_pool_layers", str(pooling_cfg.get("num_layers", ""))),
         ("pool_ratio",      str(pooling_cfg.get("ratio", ""))),

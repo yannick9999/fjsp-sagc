@@ -53,6 +53,9 @@ def main():
     model_paras = load_dict["model_paras"]
     train_paras = load_dict["train_paras"]
     test_paras = load_dict["test_paras"]
+    seed = train_paras["seed"]
+    setup_seed(seed)
+    print(f"Seed: {seed}")
     env_paras["device"] = device
     model_paras["device"] = device
     env_test_paras = copy.deepcopy(env_paras)
