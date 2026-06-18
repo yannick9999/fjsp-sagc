@@ -1,10 +1,12 @@
 from .topk import TopKPool, TopKUnpool
 from .sagc import SAGCPool
+from .identity import IdentityPool, IdentityUnpool
 
 
 POOLING_REGISTRY = {
     "topk": (TopKPool, TopKUnpool),
     "sagc": (SAGCPool, TopKUnpool),
+    "nopooling": (IdentityPool, IdentityUnpool),
 }
 
 
@@ -34,7 +36,9 @@ def build_pooling(model_paras: dict):
 
     pool_cls, _ = POOLING_REGISTRY[method]
 
-    if method == "sagc":
+    if method == "nopooling":
+        return pool_cls()
+    elif method == "sagc":
         ope_feat_dim = model_paras["in_size_ope"]
         return pool_cls(in_feats, ope_feat_dim, ratio, k_mode)
     else:

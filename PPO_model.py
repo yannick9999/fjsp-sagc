@@ -147,8 +147,8 @@ class HGNNScheduler(nn.Module):
         self.actor = MLPActor(self.n_hidden_actor, self.actor_dim, self.n_latent_actor, self.action_dim).to(self.device)
         self.critic = MLPCritic(self.n_hidden_critic, self.critic_dim, self.n_latent_critic, 1).to(self.device)
 
-        self.coarsening = model_paras["pooling"]["method"]   # "none" | "topk" | ...
-        if self.coarsening != "none":
+        self.coarsening = model_paras["pooling"]["method"]   # "song_baseline" | "topk" | "sagc" | "nopooling" | ...
+        if self.coarsening != "song_baseline":
             self.graph_unet = GraphUNet(model_paras)
 
     def forward(self):
@@ -214,7 +214,7 @@ class HGNNScheduler(nn.Module):
         B = features[0].size(0)
         batch_idxes = torch.arange(B, device=features[0].device)
 
-        if self.coarsening != "none":
+        if self.coarsening != "song_baseline":
             return self.graph_unet(features[0], features[1], features[2],
                                    ope_ma_adj, ope_pre_adj, ope_sub_adj,
                                    nums_opes, opes_appertain, eligible_opes, completed_opes)
