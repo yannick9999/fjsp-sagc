@@ -1,8 +1,10 @@
 from .topk import TopKPool, TopKUnpool
+from .sagc import SAGCPool
 
 
 POOLING_REGISTRY = {
     "topk": (TopKPool, TopKUnpool),
+    "sagc": (SAGCPool, TopKUnpool),
 }
 
 
@@ -31,7 +33,12 @@ def build_pooling(model_paras: dict):
     k_mode   = cfg.get("k_mode", "jobs")
 
     pool_cls, _ = POOLING_REGISTRY[method]
-    return pool_cls(in_feats, ratio, k_mode)
+
+    if method == "sagc":
+        ope_feat_dim = model_paras["in_size_ope"]
+        return pool_cls(in_feats, ope_feat_dim, ratio, k_mode)
+    else:
+        return pool_cls(in_feats, ratio, k_mode)
 
 
 def build_unpooling(model_paras: dict):

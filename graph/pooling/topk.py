@@ -56,7 +56,8 @@ class TopKPool(nn.Module):
         return pre_adj, sub_adj
 
     def forward(self, h, ope_pre_adj, ope_sub_adj, ope_ma_adj, proc_time,
-                nums_opes, opes_appertain, eligible_opes=None, completed_opes=None):
+                nums_opes, opes_appertain, eligible_opes=None, completed_opes=None,
+                ope_feats=None):
         """
         Inputs:
             h              (Tensor): node embeddings, shape [B, N, d]

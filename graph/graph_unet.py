@@ -181,6 +181,7 @@ class GraphUNet(nn.Module):
         cur_appertain = opes_appertain
         cur_eligible  = eligible_opes
         cur_completed = completed_opes
+        cur_ope_feats = raw_opes
 
         for i in range(L):
             skips.append({"h": h_opes, "pre": cur_pre, "sub": cur_sub,
@@ -193,7 +194,8 @@ class GraphUNet(nn.Module):
 
             h_opes, cur_pre, cur_sub, cur_ma, cur_proc, info = self.pools[i](
                 h_opes, cur_pre, cur_sub, cur_ma, cur_proc,
-                cur_nums_opes, cur_appertain, cur_eligible, cur_completed)
+                cur_nums_opes, cur_appertain, cur_eligible, cur_completed,
+                ope_feats=cur_ope_feats)
 
             if self._timing_enabled:
                 if _is_cuda:
@@ -204,6 +206,7 @@ class GraphUNet(nn.Module):
             cur_appertain = info["opes_appertain_pooled"]
             cur_eligible  = info["eligible_opes_pooled"]
             cur_completed = info["completed_opes_pooled"]
+            cur_ope_feats = info.get("ope_feats_pooled", cur_ope_feats)
             skips[-1]["info"] = info
 
             h_opes, h_mas = self.gcns[i + 1](h_opes, h_mas, cur_proc,

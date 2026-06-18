@@ -22,7 +22,7 @@
     "n_hidden_critic": 3,
     "action_dim": 1,
     "pooling": {
-        "method": "none",
+        "method": "sagc",
         "ratio": 2.0,
         "k_mode": "jobs",
         "num_layers": 1
