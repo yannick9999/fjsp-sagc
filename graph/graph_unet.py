@@ -142,7 +142,7 @@ class GraphUNet(nn.Module):
 
     def forward(self, raw_opes, raw_mas, proc_time,
                 ope_ma_adj, ope_pre_adj, ope_sub_adj,
-                nums_opes, opes_appertain, eligible_opes):
+                nums_opes, opes_appertain, eligible_opes, completed_opes=None):
         '''
         All inputs already indexed to the active batch.
             raw_opes       [B, N, in_size_ope]
@@ -154,6 +154,7 @@ class GraphUNet(nn.Module):
             nums_opes      [B]
             opes_appertain [B, N] job index per operation
             eligible_opes  [B, N] bool, True = must not be pooled
+            completed_opes [B, N] bool, True = completed, exclude from pooling
         Returns:
             h_opes [B, N, out_size_ope]
             h_mas  [B, M, out_size_ma]
@@ -179,6 +180,7 @@ class GraphUNet(nn.Module):
         cur_nums_opes = nums_opes
         cur_appertain = opes_appertain
         cur_eligible  = eligible_opes
+        cur_completed = completed_opes
 
         for i in range(L):
             skips.append({"h": h_opes, "pre": cur_pre, "sub": cur_sub,
@@ -191,7 +193,7 @@ class GraphUNet(nn.Module):
 
             h_opes, cur_pre, cur_sub, cur_ma, cur_proc, info = self.pools[i](
                 h_opes, cur_pre, cur_sub, cur_ma, cur_proc,
-                cur_nums_opes, cur_appertain, cur_eligible)
+                cur_nums_opes, cur_appertain, cur_eligible, cur_completed)
 
             if self._timing_enabled:
                 if _is_cuda:
@@ -201,6 +203,7 @@ class GraphUNet(nn.Module):
             cur_nums_opes = info["nums_opes_pooled"]
             cur_appertain = info["opes_appertain_pooled"]
             cur_eligible  = info["eligible_opes_pooled"]
+            cur_completed = info["completed_opes_pooled"]
             skips[-1]["info"] = info
 
             h_opes, h_mas = self.gcns[i + 1](h_opes, h_mas, cur_proc,

@@ -56,7 +56,7 @@ class TopKPool(nn.Module):
         return pre_adj, sub_adj
 
     def forward(self, h, ope_pre_adj, ope_sub_adj, ope_ma_adj, proc_time,
-                nums_opes, opes_appertain, eligible_opes=None):
+                nums_opes, opes_appertain, eligible_opes=None, completed_opes=None):
         """
         Inputs:
             h              (Tensor): node embeddings, shape [B, N, d]
@@ -67,6 +67,7 @@ class TopKPool(nn.Module):
             nums_opes      (Tensor): number of real operations per instance, shape [B]
             opes_appertain (Tensor): job index per operation, shape [B, N]
             eligible_opes  (Tensor): optional bool mask, shape [B, N], True = node must not be pooled
+            completed_opes (Tensor): optional bool mask, shape [B, N], True = completed, exclude from pooling
 
         Outputs:
             h_pooled      (Tensor): pooled embeddings, shape [B, k, d]
@@ -74,7 +75,8 @@ class TopKPool(nn.Module):
             sub_pooled    (Tensor): pooled successor adjacency via chain reconstruction, shape [B, k, k]
             ope_ma_pooled (Tensor): pooled operation-machine adjacency, row reduction only, shape [B, k, M]
             proc_pooled   (Tensor): pooled edge features, row reduction only, shape [B, k, M]
-            pool_info     (dict):   keys: top_idx, gate, original_size
+            pool_info     (dict):   keys: top_idx, gate, original_size, nums_opes_pooled,
+                                    opes_appertain_pooled, eligible_opes_pooled, completed_opes_pooled
         """
         B, N, d = h.shape
 
@@ -82,7 +84,7 @@ class TopKPool(nn.Module):
         gate_scores = torch.sigmoid(self.proj(h).squeeze(-1))
 
         # mask padding nodes (-inf) and protect eligible nodes (+inf)
-        pad_mask, protect_mask = build_score_mask(N, nums_opes, h.device, eligible_opes)
+        pad_mask, protect_mask = build_score_mask(N, nums_opes, h.device, eligible_opes, completed_opes)
         sel_scores = gate_scores.masked_fill(pad_mask, float('-inf'))
         sel_scores = sel_scores.masked_fill(protect_mask, float('inf'))
 
@@ -128,13 +130,19 @@ class TopKPool(nn.Module):
         else:
             eligible_opes_pooled = None
 
+        if completed_opes is not None:
+            completed_opes_pooled = completed_opes.gather(1, top_idx)
+        else:
+            completed_opes_pooled = None
+
         pool_info = {
-            "top_idx":               top_idx,               # [B, k]
-            "gate":                  gate,                   # [B, k]
-            "original_size":         N,
-            "nums_opes_pooled":      nums_opes_pooled,       # [B]
-            "opes_appertain_pooled": opes_appertain_pooled,  # [B, k]
-            "eligible_opes_pooled":  eligible_opes_pooled,   # [B, k] or None
+            "top_idx":                top_idx,                # [B, k]
+            "gate":                   gate,                   # [B, k]
+            "original_size":          N,
+            "nums_opes_pooled":       nums_opes_pooled,       # [B]
+            "opes_appertain_pooled":  opes_appertain_pooled,  # [B, k]
+            "eligible_opes_pooled":   eligible_opes_pooled,   # [B, k] or None
+            "completed_opes_pooled":  completed_opes_pooled,  # [B, k] or None
         }
 
         return h_pooled, pre_pooled, sub_pooled, ope_ma_pooled, proc_pooled, pool_info

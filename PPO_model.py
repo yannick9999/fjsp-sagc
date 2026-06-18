@@ -205,7 +205,7 @@ class HGNNScheduler(nn.Module):
                 proc_time_norm)
 
     def embed(self, ope_ma_adj, ope_pre_adj, ope_sub_adj, features, nums_opes,
-              opes_appertain, eligible_opes):
+              opes_appertain, eligible_opes, completed_opes=None):
         '''
         All inputs already indexed to the active batch.
         features = (raw_opes, raw_mas, proc_time)
@@ -217,7 +217,7 @@ class HGNNScheduler(nn.Module):
         if self.coarsening != "none":
             return self.graph_unet(features[0], features[1], features[2],
                                    ope_ma_adj, ope_pre_adj, ope_sub_adj,
-                                   nums_opes, opes_appertain, eligible_opes)
+                                   nums_opes, opes_appertain, eligible_opes, completed_opes)
 
         # Song's baseline, L iterations of the HGNN
         for i in range(len(self.num_heads)):
@@ -275,8 +275,15 @@ class HGNNScheduler(nn.Module):
         eligible_opes.scatter_(1, ope_step_batch[batch_idxes], job_truly_eligible)
 
         opes_appertain = state.opes_appertain_batch[batch_idxes]
+
+        N = features[0].size(1)
+        B_active = batch_idxes.size(0)
+        current_step_per_op = ope_step_batch[batch_idxes].gather(1, opes_appertain)
+        op_indices = torch.arange(N, device=features[0].device).unsqueeze(0).expand(B_active, -1)
+        completed_opes = op_indices < current_step_per_op
+
         h_opes, h_mas = self.embed(ope_ma_adj, ope_pre_adj, ope_sub_adj, features, nums_opes,
-                                   opes_appertain, eligible_opes)
+                                   opes_appertain, eligible_opes, completed_opes)
 
         # Stacking and pooling
         h_mas_pooled = h_mas.mean(dim=-2)  # shape: [len(batch_idxes), out_size_ma]
@@ -363,8 +370,13 @@ class HGNNScheduler(nn.Module):
         eligible_opes = torch.zeros(raw_opes.size(0), N, dtype=torch.bool, device=raw_opes.device)
         eligible_opes.scatter_(1, ope_step, job_truly_eligible)
 
+        B = raw_opes.size(0)
+        current_step_per_op = ope_step.gather(1, opes_appertain)
+        op_indices = torch.arange(N, device=raw_opes.device).unsqueeze(0).expand(B, -1)
+        completed_opes = op_indices < current_step_per_op
+
         h_opes, h_mas = self.embed(ope_ma_adj, ope_pre_adj, ope_sub_adj,
-                                   features, nums_opes, opes_appertain, eligible_opes)
+                                   features, nums_opes, opes_appertain, eligible_opes, completed_opes)
 
         # Stacking and pooling
         h_mas_pooled = h_mas.mean(dim=-2)
