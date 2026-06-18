@@ -22,8 +22,8 @@
     "n_hidden_critic": "Number of layers in critic",
     "action_dim": "Output dimension of actor",
     "pooling": {
-      "method": "Pooling method: 'topk' (generic learned), 'sagc' (scheduling-aware learned, uses ope features for scoring), 'nopooling' (identity pooling, U-Net without actual pooling), or 'song_baseline' (no U-Net)",
-      "ratio": "k_mode='jobs': multiplier per job (e.g. 2.0 = keep 2*num_jobs nodes). k_mode='ops': fraction of operations to keep (e.g. 0.5 = keep 50%)",
+      "method": "Pooling method: 'topk', 'sagc', 'nopooling' or 'song_baseline' (no U-Net)",
+      "ratio": "k_mode='jobs': multiplier per job. k_mode='ops': fraction of operations to keep",
       "k_mode": "'jobs' = k relative to number of jobs (primary), 'ops' = k relative to total operations (secondary)",
       "num_layers": "Number of pooling/unpooling layers in the U-Net"
     }
