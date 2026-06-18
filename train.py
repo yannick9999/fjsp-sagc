@@ -1,3 +1,4 @@
+import argparse
 import copy
 import json
 import os
@@ -24,6 +25,13 @@ def setup_seed(seed):
     torch.backends.cudnn.deterministic = True
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Override seed from config.json")
+    parser.add_argument("--exp_name", type=str, default=None,
+                        help="Experiment name for output folder")
+    args = parser.parse_args()
+
     # PyTorch initialization
     # gpu_tracker = MemTracker()  # Used to monitor memory (of gpu)
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -44,6 +52,8 @@ def main():
     env_paras = load_dict["env_paras"]
     model_paras = load_dict["model_paras"]
     train_paras = load_dict["train_paras"]
+    if args.seed is not None:
+        train_paras["seed"] = args.seed
     seed = train_paras["seed"]
     setup_seed(seed)
     print(f"Seed: {seed}")
@@ -80,8 +90,11 @@ def main():
 
     # Output paths
     str_time = time.strftime("%Y%m%d_%H%M%S", time.localtime(time.time()))
-    save_path = './save/train_{0}_seed{1}'.format(str_time, seed)
-    os.makedirs(save_path)
+    if args.exp_name is not None:
+        save_path = './save/{0}/seed{1}'.format(args.exp_name, seed)
+    else:
+        save_path = './save/train_{0}_seed{1}'.format(str_time, seed)
+    os.makedirs(save_path, exist_ok=True)
 
     # Accumulators for validation results
     valid_iterations = []

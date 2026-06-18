@@ -1,3 +1,4 @@
+import argparse
 import copy
 import json
 import os
@@ -27,6 +28,11 @@ def setup_seed(seed):
     torch.backends.cudnn.deterministic = True
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model_dir", type=str, default="./model/",
+                        help="Directory containing .pt model file(s)")
+    args = parser.parse_args()
+
     # PyTorch initialization
     # gpu_tracker = MemTracker()  # Used to monitor memory (of gpu)
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -71,7 +77,7 @@ def main():
     test_files = os.listdir(data_path)
     test_files.sort(key=lambda x: x[:-4])
     test_files = test_files[:num_ins]
-    mod_files = os.listdir('./model/')[:]
+    mod_files = os.listdir(args.model_dir)[:]
 
     memories = PPO_model.Memory()
     model = PPO_model.PPO(model_paras, train_paras)
@@ -85,7 +91,7 @@ def main():
 
     # Detect and add models to "rules"
     if "DRL" in rules:
-        for root, ds, fs in os.walk('./model/'):
+        for root, ds, fs in os.walk(args.model_dir):
             for f in fs:
                 if f.endswith('.pt'):
                     rules.append(f)
@@ -110,7 +116,7 @@ def main():
         rule = rules[i_rules]
         # Load trained model
         if rule.endswith('.pt'):
-            ckpt_path = './model/' + mod_files[i_rules]
+            ckpt_path = os.path.join(args.model_dir, mod_files[i_rules])
             if device.type == 'cuda':
                 model_CKPT = torch.load(ckpt_path)
             else:
