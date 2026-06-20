@@ -1,4 +1,7 @@
 {
+  "experiment": {
+    "name": "sagc_20x10"
+  },
   "env_paras": {
     "num_jobs": 20,
     "num_mas": 10,
@@ -41,18 +44,12 @@
     "max_iterations": 1000,
     "save_timestep": 10,
     "update_timestep": 1,
-    "viz": false,
-    "viz_name": "Paper_1005",
     "minibatch_size": 512,
     "parallel_iter": 20
   },
   "test_paras": {
-    "num_ins": 100,
     "rules": ["DRL"],
-    "sample": false,
     "num_sample": 100,
-    "num_average": 10,
-    "public_ins": true,
-    "data_path": "1005"
+    "num_average": 10
   }
 }

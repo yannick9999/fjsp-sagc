@@ -5,15 +5,12 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=24
 #SBATCH --gpus-per-node=1
-#SBATCH --time=2:00:00
+#SBATCH --time=12:00:00
 #SBATCH --array=0-2
 #SBATCH --output=logs/test_seed%a_%j.out
 #SBATCH --error=logs/test_seed%a_%j.err
 
 set -euo pipefail
-
-# Experiment name: must match the training experiment
-EXP_NAME="${EXP_NAME:?Set EXP_NAME before submitting, e.g.: export EXP_NAME=sagc_20x10}"
 
 REPO_ROOT="${SLURM_SUBMIT_DIR:?submit from repo root}"
 cd "${REPO_ROOT}"
@@ -29,9 +26,11 @@ PYTHON="/home/grafyann/master_thesis_env/bin/python"
 [[ -x "${PYTHON}" ]] || { echo "Missing ${PYTHON}" >&2; exit 1; }
 
 SEED=${SLURM_ARRAY_TASK_ID}
+# Experiment name comes from config.json (single source of truth)
+EXP_NAME=$("${PYTHON}" -c "import json; print(json.load(open('config.json'))['experiment']['name'])")
 MODEL_DIR="./save/${EXP_NAME}/seed${SEED}"
 
-# Verify model exists
+# Verify model exists before launching
 if ! ls "${MODEL_DIR}"/*.pt 1>/dev/null 2>&1; then
     echo "ERROR: No .pt file found in ${MODEL_DIR}" >&2
     exit 1
@@ -40,4 +39,4 @@ fi
 echo "=== Testing seed=${SEED} exp=${EXP_NAME} model_dir=${MODEL_DIR} ==="
 srun nvidia-smi || true
 
-exec srun "${PYTHON}" test.py --model_dir "${MODEL_DIR}"
+exec srun "${PYTHON}" run_test_suite.py --seed "${SEED}"

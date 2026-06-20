@@ -3,13 +3,13 @@ import copy
 import json
 import os
 import random
+import shutil
 import time
 from collections import deque
 
 import pandas as pd
 import torch
 import numpy as np
-import matplotlib.pyplot as plt
 
 import PPO_model
 from env.case_generator import CaseGenerator
@@ -28,8 +28,6 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, default=None,
                         help="Override seed from config.json")
-    parser.add_argument("--exp_name", type=str, default=None,
-                        help="Experiment name for output folder")
     args = parser.parse_args()
 
     # PyTorch initialization
@@ -49,6 +47,7 @@ def main():
     # Load config and init objects
     with open("./config.json", 'r') as load_f:
         load_dict = json.load(load_f)
+    exp_name = load_dict["experiment"]["name"]
     env_paras = load_dict["env_paras"]
     model_paras = load_dict["model_paras"]
     train_paras = load_dict["train_paras"]
@@ -76,25 +75,12 @@ def main():
     best_models = deque()
     makespan_best = float('inf')
 
-    # Use matplotlib to visualize the training process
-    is_viz = train_paras["viz"]
-    if is_viz:
-        plt.ion()
-        fig, (ax_reward, ax_loss, ax_makespan) = plt.subplots(3, 1, figsize=(10, 8))
-        ax_reward.set_title('reward of envs')
-        ax_loss.set_title('loss of envs')
-        ax_makespan.set_title('makespan of valid')
-        viz_x_reward, viz_y_reward = [], []
-        viz_x_loss, viz_y_loss = [], []
-        viz_x_makespan, viz_y_makespan = [], []
-
     # Output paths
     str_time = time.strftime("%Y%m%d_%H%M%S", time.localtime(time.time()))
-    if args.exp_name is not None:
-        save_path = './save/{0}/seed{1}'.format(args.exp_name, seed)
-    else:
-        save_path = './save/train_{0}_seed{1}'.format(str_time, seed)
+    save_path = './save/{0}/seed{1}'.format(exp_name, seed)
     os.makedirs(save_path, exist_ok=True)
+    # Snapshot the exact config used for this run (audit trail against later edits)
+    shutil.copy("./config.json", os.path.join(save_path, "config_used.json"))
 
     # Accumulators for validation results
     valid_iterations = []
@@ -147,14 +133,6 @@ def main():
             loss, reward = model.update(memories, env_paras, train_paras)
             print("reward: ", '%.3f' % reward, "; loss: ", '%.3f' % loss)
             memories.clear_memory()
-            if is_viz:
-                viz_x_reward.append(i); viz_y_reward.append(reward)
-                ax_reward.cla(); ax_reward.set_title('reward of envs')
-                ax_reward.plot(viz_x_reward, viz_y_reward)
-                viz_x_loss.append(i); viz_y_loss.append(loss)
-                ax_loss.cla(); ax_loss.set_title('loss of envs')
-                ax_loss.plot(viz_x_loss, viz_y_loss)
-                plt.tight_layout(); plt.pause(0.001)
 
         # if iter mod x = 0 then validate the policy (x = 10 in paper)
         if i % train_paras["save_timestep"] == 0:
@@ -188,12 +166,6 @@ def main():
                 }
                 torch.save(checkpoint, save_file)
 
-            if is_viz:
-                viz_x_makespan.append(i); viz_y_makespan.append(vali_result.item())
-                ax_makespan.cla(); ax_makespan.set_title('makespan of valid')
-                ax_makespan.plot(viz_x_makespan, viz_y_makespan)
-                plt.tight_layout(); plt.pause(0.001)
-
     total_runtime_sec = time.time() - start_time
 
     # Peak GPU memory over the full training run
@@ -220,6 +192,7 @@ def main():
 
     pooling_cfg = model_paras.get("pooling", {})
     metadata = [
+        ("experiment",      exp_name),
         ("timestamp",       str_time),
         ("seed",            str(seed)),
         ("method",          str(pooling_cfg.get("method", ""))),
@@ -241,11 +214,6 @@ def main():
         df_curve.to_excel(writer, sheet_name='validation_curve', index=False)
         df_per_inst.to_excel(writer, sheet_name='validation_per_instance', index=False)
         df_meta.to_excel(writer, sheet_name='run_metadata', index=False)
-
-    if is_viz:
-        fig.savefig('{0}/training_plot_{1}.png'.format(save_path, str_time))
-        plt.ioff()
-        plt.close()
 
     print("total_time: ", total_runtime_sec)
 

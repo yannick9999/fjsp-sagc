@@ -29,8 +29,16 @@ def setup_seed(seed):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model_dir", type=str, default="./model/",
-                        help="Directory containing .pt model file(s)")
+    parser.add_argument("--seed", type=int, default=None,
+                        help="Override seed from config.json (also selects model_dir)")
+    parser.add_argument("--data_path", type=str, required=True,
+                        help="Test set folder under ./data_test/ (e.g. 2010, Mk)")
+    parser.add_argument("--sample", type=lambda x: str(x).lower() == "true", default=False,
+                        help="DRL-S sampling mode (true/false). Default false = greedy DRL-G")
+    parser.add_argument("--num_ins", type=int, required=True,
+                        help="Number of instances to evaluate")
+    parser.add_argument("--output_dir", type=str, required=True,
+                        help="Directory to write test results into")
     args = parser.parse_args()
 
     # PyTorch initialization
@@ -55,11 +63,16 @@ def main():
     # Load config and init objects
     with open("./config.json", 'r') as load_f:
         load_dict = json.load(load_f)
+    exp_name = load_dict["experiment"]["name"]
     env_paras = load_dict["env_paras"]
     model_paras = load_dict["model_paras"]
     train_paras = load_dict["train_paras"]
     test_paras = load_dict["test_paras"]
-    seed = train_paras["seed"]
+    # CLI overrides for test-specific parameters (kept out of config.json)
+    seed = args.seed if args.seed is not None else train_paras["seed"]
+    test_paras["data_path"] = args.data_path
+    test_paras["sample"] = args.sample
+    test_paras["num_ins"] = args.num_ins
     setup_seed(seed)
     print(f"Seed: {seed}")
     env_paras["device"] = device
@@ -73,11 +86,14 @@ def main():
     model_paras["actor_in_dim"] = model_paras["out_size_ma"] * 2 + model_paras["out_size_ope"] * 2
     model_paras["critic_in_dim"] = model_paras["out_size_ma"] + model_paras["out_size_ope"]
 
+    # Model directory derived from experiment name + seed (single source of truth)
+    model_dir = './save/{0}/seed{1}'.format(exp_name, seed)
+
     data_path = "./data_test/{0}/".format(test_paras["data_path"])
     test_files = os.listdir(data_path)
     test_files.sort(key=lambda x: x[:-4])
     test_files = test_files[:num_ins]
-    mod_files = os.listdir(args.model_dir)[:]
+    mod_files = os.listdir(model_dir)[:]
 
     memories = PPO_model.Memory()
     model = PPO_model.PPO(model_paras, train_paras)
@@ -88,10 +104,11 @@ def main():
     if has_graph_unet:
         model.policy_old.graph_unet._timing_enabled = True
     coarsening_rows = []
+    ckpt_pooling_cfg = None  # filled from checkpoint, used for metadata sheet
 
     # Detect and add models to "rules"
     if "DRL" in rules:
-        for root, ds, fs in os.walk(args.model_dir):
+        for root, ds, fs in os.walk(model_dir):
             for f in fs:
                 if f.endswith('.pt'):
                     rules.append(f)
@@ -99,10 +116,10 @@ def main():
         if "DRL" in rules:
             rules.remove("DRL")
 
-    # Output paths
+    # Output paths (write results directly into output_dir)
     str_time = time.strftime("%Y%m%d_%H%M%S", time.localtime(time.time()))
-    save_path = './save/test_{0}'.format(str_time)
-    os.makedirs(save_path)
+    save_path = args.output_dir
+    os.makedirs(save_path, exist_ok=True)
 
     file_name_col = [test_files[i] for i in range(num_ins)]
 
@@ -116,7 +133,7 @@ def main():
         rule = rules[i_rules]
         # Load trained model
         if rule.endswith('.pt'):
-            ckpt_path = os.path.join(args.model_dir, mod_files[i_rules])
+            ckpt_path = os.path.join(model_dir, mod_files[i_rules])
             if device.type == 'cuda':
                 model_CKPT = torch.load(ckpt_path)
             else:
@@ -135,6 +152,7 @@ def main():
                 if hasattr(model.policy_old, 'graph_unet'):
                     model.policy_old.graph_unet._timing_enabled = True
                 has_graph_unet = hasattr(model.policy_old, 'graph_unet')
+                ckpt_pooling_cfg = ckpt_model_paras.get("pooling", {})
                 print(f"  config from checkpoint: method={ckpt_model_paras['pooling']['method']}")
             else:
                 state_dict = model_CKPT
@@ -247,9 +265,13 @@ def main():
 
     df_coarsening = pd.DataFrame(coarsening_rows)
 
-    pooling_cfg = model_paras.get("pooling", {})
+    # Pooling info for metadata comes from the checkpoint (the true architecture),
+    # falling back to config.json only for old-format checkpoints.
+    pooling_cfg = ckpt_pooling_cfg if ckpt_pooling_cfg is not None else model_paras.get("pooling", {})
     metadata = [
+        ("experiment",      exp_name),
         ("timestamp",       str_time),
+        ("seed",            str(seed)),
         ("method",          str(pooling_cfg.get("method", ""))),
         ("num_pool_layers", str(pooling_cfg.get("num_layers", ""))),
         ("pool_ratio",      str(pooling_cfg.get("ratio", ""))),
