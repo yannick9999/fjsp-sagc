@@ -110,7 +110,7 @@ class GATedge(nn.Module):
         Wmu_ijk = feat_edge + feat_src.unsqueeze(-2)
         a = Wmu_ijk * alpha_ijk.unsqueeze(-1)
         b = torch.sum(a, dim=-3)
-        c = feat_dst * alpha_kk.squeeze().unsqueeze(-1)
+        c = feat_dst * alpha_kk[:, 0, :, 0].unsqueeze(-1)
         nu_k_prime = torch.sigmoid(b+c)
         return nu_k_prime
 

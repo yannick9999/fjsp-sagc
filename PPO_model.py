@@ -128,28 +128,29 @@ class HGNNScheduler(nn.Module):
         self.num_heads = model_paras["num_heads"]
         self.dropout = model_paras["dropout"]
 
-        # Machine node embedding
-        self.get_machines = nn.ModuleList()
-        self.get_machines.append(GATedge((self.in_size_ope, self.in_size_ma), self.out_size_ma, self.num_heads[0],
-                                    self.dropout, self.dropout, activation=F.elu))
-        for i in range(1,len(self.num_heads)):
-            self.get_machines.append(GATedge((self.out_size_ope, self.out_size_ma), self.out_size_ma, self.num_heads[i],
-                                    self.dropout, self.dropout, activation=F.elu))
+        self.coarsening = model_paras["pooling"]["method"]
 
-        # Operation node embedding
-        self.get_operations = nn.ModuleList()
-        self.get_operations.append(MLPs([self.out_size_ma, self.in_size_ope, self.in_size_ope, self.in_size_ope],
-                                        self.hidden_size_ope, self.out_size_ope, self.num_heads[0], self.dropout))
-        for i in range(len(self.num_heads)-1):
-            self.get_operations.append(MLPs([self.out_size_ma, self.out_size_ope, self.out_size_ope, self.out_size_ope],
-                                            self.hidden_size_ope, self.out_size_ope, self.num_heads[i], self.dropout))
+        if self.coarsening == "song_baseline":
+            # Machine node embedding
+            self.get_machines = nn.ModuleList()
+            self.get_machines.append(GATedge((self.in_size_ope, self.in_size_ma), self.out_size_ma, self.num_heads[0],
+                                        self.dropout, self.dropout, activation=F.elu))
+            for i in range(1,len(self.num_heads)):
+                self.get_machines.append(GATedge((self.out_size_ope, self.out_size_ma), self.out_size_ma, self.num_heads[i],
+                                        self.dropout, self.dropout, activation=F.elu))
+
+            # Operation node embedding
+            self.get_operations = nn.ModuleList()
+            self.get_operations.append(MLPs([self.out_size_ma, self.in_size_ope, self.in_size_ope, self.in_size_ope],
+                                            self.hidden_size_ope, self.out_size_ope, self.num_heads[0], self.dropout))
+            for i in range(len(self.num_heads)-1):
+                self.get_operations.append(MLPs([self.out_size_ma, self.out_size_ope, self.out_size_ope, self.out_size_ope],
+                                                self.hidden_size_ope, self.out_size_ope, self.num_heads[i], self.dropout))
+        else:
+            self.graph_unet = GraphUNet(model_paras)
 
         self.actor = MLPActor(self.n_hidden_actor, self.actor_dim, self.n_latent_actor, self.action_dim).to(self.device)
         self.critic = MLPCritic(self.n_hidden_critic, self.critic_dim, self.n_latent_critic, 1).to(self.device)
-
-        self.coarsening = model_paras["pooling"]["method"]   # "song_baseline" | "topk" | "sagc" | "nopooling" | ...
-        if self.coarsening != "song_baseline":
-            self.graph_unet = GraphUNet(model_paras)
 
     def forward(self):
         '''

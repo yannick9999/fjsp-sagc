@@ -47,12 +47,12 @@ class TopKPool(nn.Module):
         same_job = (kept_jobs[:, 1:] == kept_jobs[:, :-1])     # [B, k-1]
 
         # edge i -> i+1 in the sorted kept order
-        sub_adj = torch.zeros(B, k, k, device=device)
+        pre_adj = torch.zeros(B, k, k, device=device)
         rows = torch.arange(k - 1, device=device)
         cols = rows + 1
-        sub_adj[:, rows, cols] = same_job.float()
+        pre_adj[:, rows, cols] = same_job.float()
 
-        pre_adj = sub_adj.transpose(1, 2).contiguous()
+        sub_adj = pre_adj.transpose(1, 2).contiguous()
         return pre_adj, sub_adj
 
     def forward(self, h, ope_pre_adj, ope_sub_adj, ope_ma_adj, proc_time,
@@ -100,8 +100,22 @@ class TopKPool(nn.Module):
         else:
             raise ValueError(f"Unknown k_mode '{self.k_mode}'. Use 'jobs' or 'ops'.")
 
-        k = max(num_protected, k_target)
-        k = min(k, int(nums_opes.min().item()))
+        selectable = (~pad_mask).sum(dim=-1)
+        selectable_min = int(selectable.min().item())
+
+        k = min(k_target, selectable_min)
+        k = max(k, num_protected)
+
+        if k < 1:
+            print(f"WARNING: k={k} < 1 "
+                  f"(num_protected={num_protected}, k_target={k_target}, "
+                  f"selectable_min={selectable_min})")
+            k = 1
+
+        if num_protected > selectable_min:
+            print(f"WARNING: num_protected ({num_protected}) > "
+                  f"selectable_min ({selectable_min}), "
+                  f"completed nodes will enter pooled set")
 
         top_idx = torch.topk(sel_scores, k, dim=-1).indices   # [B, k]
         top_idx, _ = torch.sort(top_idx, dim=-1)           # preserve position order

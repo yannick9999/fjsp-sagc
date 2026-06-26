@@ -20,7 +20,6 @@ def plot_operation_graph(
     title="Operation Graph",
     save_path=None,
     show=True,
-    transpose_adj=False,
     ope_ma_adj=None,
     show_machines=False,
     eligible_opes=None,
@@ -43,10 +42,7 @@ def plot_operation_graph(
     for i in range(nums_opes):
         for j in range(nums_opes):
             if adj[i, j] > 0:
-                if transpose_adj:
-                    op_edges.append((j, i))
-                else:
-                    op_edges.append((i, j))
+                op_edges.append((i, j))
     G.add_edges_from(op_edges)
 
     num_mas = 0
