@@ -1,11 +1,13 @@
 from .topk import TopKPool, TopKUnpool
 from .sagc import SAGCPool
+from .random_pool import RandomPool
 from .identity import IdentityPool, IdentityUnpool
 
 
 POOLING_REGISTRY = {
     "topk": (TopKPool, TopKUnpool),
     "sagc": (SAGCPool, TopKUnpool),
+    "random": (RandomPool, TopKUnpool),
     "nopooling": (IdentityPool, IdentityUnpool),
 }
 
@@ -41,6 +43,8 @@ def build_pooling(model_paras: dict):
     elif method == "sagc":
         ope_feat_dim = model_paras["in_size_ope"]
         return pool_cls(in_feats, ope_feat_dim, ratio, k_mode)
+    elif method == "random":
+        return pool_cls(in_feats, ratio, k_mode)
     else:
         return pool_cls(in_feats, ratio, k_mode)
 

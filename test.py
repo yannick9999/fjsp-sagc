@@ -3,6 +3,7 @@ import copy
 import json
 import os
 import random
+import random as pyrandom
 import time as time
 
 import pandas as pd
@@ -11,6 +12,10 @@ import numpy as np
 
 import pynvml
 import PPO_model
+from utils.diagnostics import (
+    compute_node_categories, compute_step_metrics,
+    save_graph_snapshot, make_all_plots
+)
 from env.fjsp_env import FJSPEnv
 from env.load_data import nums_detec
 
@@ -39,6 +44,10 @@ def main():
                         help="Number of instances to evaluate")
     parser.add_argument("--output_dir", type=str, required=True,
                         help="Directory to write test results into")
+    parser.add_argument("--diagnose", action="store_true",
+                        help="Enable pooling diagnostics (collects per-step metrics)")
+    parser.add_argument("--save_graphs", type=int, default=0,
+                        help="Save N random graph snapshots per instance (requires --diagnose)")
     args = parser.parse_args()
 
     # PyTorch initialization
@@ -105,6 +114,7 @@ def main():
         model.policy_old.graph_unet._timing_enabled = True
     coarsening_rows = []
     ckpt_pooling_cfg = None  # filled from checkpoint, used for metadata sheet
+    all_diagnostic_records = []
 
     # Detect and add models to "rules"
     if "DRL" in rules:
@@ -160,7 +170,21 @@ def main():
 
             model.policy.load_state_dict(state_dict)
             model.policy_old.load_state_dict(state_dict)
+
+            if args.diagnose and hasattr(model.policy_old, 'graph_unet'):
+                for pool in model.policy_old.graph_unet.pools:
+                    if hasattr(pool, 'diagnostic_mode'):
+                        pool.diagnostic_mode = True
         print('rule:', rule)
+
+        pool_layer = None
+        if args.diagnose and hasattr(model.policy_old, 'graph_unet'):
+            pool_layer = model.policy_old.graph_unet.pools[0]
+
+        snapshot_dir = None
+        if args.save_graphs > 0:
+            snapshot_dir = os.path.join(save_path, "graph_snapshots")
+            os.makedirs(snapshot_dir, exist_ok=True)
 
         # Schedule instance by instance
         step_time_last = time.time()
@@ -199,22 +223,38 @@ def main():
             # Schedule an instance/environment
             if has_graph_unet:
                 model.policy_old.graph_unet.reset_timing()
+            instance_name = test_files[i_ins].replace(".fjs", "")
             # DRL-S
             if test_paras["sample"]:
-                makespan, time_re = schedule(env, model, memories, flag_sample=test_paras["sample"])
+                makespan, time_re, step_records = schedule(
+                    env, model, memories, flag_sample=test_paras["sample"],
+                    diagnose=args.diagnose, save_graphs=args.save_graphs,
+                    instance_name=instance_name, snapshot_dir=snapshot_dir,
+                    pool_layer=pool_layer)
                 makespans.append(torch.min(makespan).item())
                 times.append(time_re)
             # DRL-G
             else:
                 time_s = []
                 makespan_s = []  # In fact, the results obtained by DRL-G do not change
+                step_records = []
                 for j in range(test_paras["num_average"]):
-                    makespan, time_re = schedule(env, model, memories)
+                    makespan, time_re, sr = schedule(
+                        env, model, memories,
+                        diagnose=args.diagnose, save_graphs=args.save_graphs,
+                        instance_name=instance_name, snapshot_dir=snapshot_dir,
+                        pool_layer=pool_layer)
                     makespan_s.append(makespan)
                     time_s.append(time_re)
+                    if j == 0:
+                        step_records = sr
                     env.reset()
                 makespans.append(torch.mean(torch.tensor(makespan_s)).item())
                 times.append(torch.mean(torch.tensor(time_s)).item())
+            for rec in step_records:
+                rec["instance"] = test_files[i_ins]
+                rec["rule"] = rule
+                all_diagnostic_records.append(rec)
             if has_graph_unet:
                 _stats = model.policy_old.graph_unet.get_timing_stats()
                 _n_dec = model.policy_old.graph_unet._n_calls
@@ -253,6 +293,16 @@ def main():
         peak_gpu_gb = '{:.4f}'.format(peak_bytes / (1024 ** 3))
     else:
         peak_gpu_gb = 'N/A'
+
+    if args.diagnose and all_diagnostic_records:
+        df_diag = pd.DataFrame(all_diagnostic_records)
+        diag_csv = os.path.join(save_path, f"diagnostics_{str_time}.csv")
+        df_diag.to_csv(diag_csv, index=False)
+        print(f"Saved {len(df_diag)} diagnostic records to {diag_csv}")
+
+        plots_dir = os.path.join(save_path, "diagnostic_plots")
+        make_all_plots(df_diag, plots_dir)
+        print(f"Saved plots to {plots_dir}")
 
     # Build DataFrames for the four sheets
     df_makespan = pd.DataFrame({"file_name": file_name_col})
@@ -297,27 +347,53 @@ def main():
 
     print("total_spend_time: ", total_runtime_sec)
 
-def schedule(env, model, memories, flag_sample=False):
-    # Get state and completion signal
+def schedule(env, model, memories, flag_sample=False, diagnose=False,
+             save_graphs=0, instance_name=None, snapshot_dir=None,
+             pool_layer=None):
     state = env.state
     dones = env.done_batch
-    done = False  # Unfinished at the beginning
+    done = False
     last_time = time.time()
     i = 0
+    step_records = []
+    snapshot_steps = []
+
     while ~done:
         i += 1
         with torch.no_grad():
-            actions = model.policy_old.act(state, memories, dones, flag_sample=flag_sample, flag_train=False)
-        state, rewards, dones = env.step(actions)  # environment transit
-        done = dones.all()
-    spend_time = time.time() - last_time  # The time taken to solve this environment (instance)
-    # print("spend_time: ", spend_time)
+            actions = model.policy_old.act(state, memories, dones,
+                                            flag_sample=flag_sample, flag_train=False)
 
-    # Verify the solution
+        if diagnose and pool_layer is not None and pool_layer._last_diag is not None:
+            cats = compute_node_categories(state, env, batch_idx=0)
+            metrics = compute_step_metrics(pool_layer._last_diag, cats, env, batch_idx=0)
+            metrics["step"] = i - 1
+            step_records.append(metrics)
+
+            if save_graphs > 0 and snapshot_dir is not None:
+                if len(snapshot_steps) < save_graphs:
+                    snapshot_steps.append((i - 1, pool_layer._last_diag, cats,
+                                            copy.deepcopy(state)))
+                else:
+                    j = pyrandom.randint(0, i - 1)
+                    if j < save_graphs:
+                        snapshot_steps[j] = (i - 1, pool_layer._last_diag, cats,
+                                              copy.deepcopy(state))
+
+        state, rewards, dones = env.step(actions)
+        done = dones.all()
+
+    spend_time = time.time() - last_time
+
+    if save_graphs > 0 and snapshot_dir is not None:
+        for step_idx, diag, cats, snap_state in snapshot_steps:
+            save_graph_snapshot(diag, cats, snap_state, env, 0, step_idx,
+                                 instance_name or "instance", snapshot_dir)
+
     gantt_result = env.validate_gantt()[0]
     if not gantt_result:
-        print("Scheduling Error！！！！！！")
-    return copy.deepcopy(env.makespan_batch), spend_time
+        print("Scheduling Error!")
+    return copy.deepcopy(env.makespan_batch), spend_time, step_records
 
 
 if __name__ == '__main__':
