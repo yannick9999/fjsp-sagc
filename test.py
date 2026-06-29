@@ -93,7 +93,7 @@ def main():
     test_files = os.listdir(data_path)
     test_files.sort(key=lambda x: x[:-4])
     test_files = test_files[:num_ins]
-    mod_files = os.listdir(model_dir)[:]
+    mod_files = [f for f in os.listdir(model_dir) if f.endswith('.pt')]
 
     memories = PPO_model.Memory()
     model = PPO_model.PPO(model_paras, train_paras)
@@ -135,7 +135,7 @@ def main():
         if rule.endswith('.pt'):
             ckpt_path = os.path.join(model_dir, mod_files[i_rules])
             if device.type == 'cuda':
-                model_CKPT = torch.load(ckpt_path)
+                model_CKPT = torch.load(ckpt_path, weights_only=False)
             else:
                 model_CKPT = torch.load(ckpt_path, map_location='cpu')
             print('\nloading checkpoint:', mod_files[i_rules])

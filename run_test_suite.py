@@ -37,7 +37,7 @@ def main():
     os.makedirs(save_dir, exist_ok=True)
 
     # Test sets to run (folder names under ./data_test/)
-    DATA_PATHS = ["2010", "5010", "10010", "20010", "Mk"]
+    DATA_PATHS = ["20010", "Mk"]
     # (sample, suffix): greedy is DRL-G, sample is DRL-S
     MODES = [(False, "greedy")]
     # MODES = [(False, "greedy"), (True, "sample")]  # uncomment to also run sampling
