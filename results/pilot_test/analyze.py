@@ -64,7 +64,7 @@ SEEDS = [0, 1, 2]
 
 # Testgroessen, einmal als "Anzeige" (mit x) und einmal als Ordnername (ohne x)
 # Ergaenze hier "200x10" sobald die Daten da sind.
-TEST_SIZES = ["20x10", "50x10", "100x10"]
+TEST_SIZES = ["20x10", "50x10", "100x10", "200x10"]
 SIZE_FOLDER_MAP = {
     "20x10": "2010",
     "50x10": "5010",
@@ -79,16 +79,16 @@ MK_SIZE = "Mk"
 # Baselines (Dispatching Rules). CP-SAT und GA spaeter ergaenzen.
 BASELINES = ["MWR", "SPT", "MOR", "FIFO"]
 BASELINE_COLORS = {
-    "MWR": "#555555",
-    "SPT": "#888888",
-    "MOR": "#aaaaaa",
-    "FIFO": "#cccccc",
+    "MWR": "#d62728",    # rot
+    "SPT": "#2ca02c",    # gruen
+    "MOR": "#9467bd",    # lila
+    "FIFO": "#8c564b",   # braun
     "CPSAT": "#222222",   # spaeter
     "GA": "#666666",      # spaeter
 }
 
 # rliable Bootstrap Replikationen
-BOOTSTRAP_REPS = 1000  # 50000 ist Standard, 1000 reicht fuer Pilottest
+BOOTSTRAP_REPS = 100  # 50000 ist Standard, 1000 reicht fuer Pilottest
 
 
 # =============================================================================
@@ -312,22 +312,28 @@ def plot_iqm_bars(score_dict_per_size: dict[str, dict[str, np.ndarray]],
         err_low = [means[i] - iqm_cis[m][0, 0] for i, m in enumerate(methods)]
         err_high = [iqm_cis[m][1, 0] - means[i] for i, m in enumerate(methods)]
         
+        bar_width = 0.20
         colors = [METHOD_COLORS[m] for m in methods]
         ax.bar(x_pos, means, yerr=[err_low, err_high], color=colors, capsize=5,
-               edgecolor="black", linewidth=0.5)
+               edgecolor="black", linewidth=0.5, width=bar_width)
+        for xi, val in zip(x_pos, means):
+            ax.text(xi, val + max(err_high) + 0.002, f"{val:.3f}",
+                    ha="center", va="bottom", fontsize=8, fontweight="bold")
         ax.set_xticks(x_pos)
         ax.set_xticklabels([METHOD_LABELS[m] for m in methods])
+        ax.set_xlim(-0.5, len(methods) - 0.5)
         ax.set_title(size)
         ax.grid(True, alpha=0.3, axis="y")
-        
+
         # Baselines als horizontale Linien
         baseline_scores = baseline_scores_per_size.get(size, {})
         for b, arr in baseline_scores.items():
             iqm_b = metrics.aggregate_iqm(arr) if arr.size else None
             if iqm_b is not None:
-                ax.axhline(iqm_b, linestyle="--", color=BASELINE_COLORS.get(b, "gray"),
-                           alpha=0.7, linewidth=1, label=b)
+                ax.axhline(iqm_b, linestyle="-", color=BASELINE_COLORS.get(b, "gray"),
+                           alpha=0.9, linewidth=1.5, label=b)
         ax.legend(fontsize=7, loc="lower left")
+        ax.set_ylim(0.7, 1.02)
     
     axes[0].set_ylabel("IQM Score (C_best / C_drl)")
     fig.suptitle("Interquartile Mean with 95% Bootstrap CIs", y=1.02)
@@ -349,7 +355,7 @@ def plot_performance_profiles(score_dict_per_size: dict[str, dict[str, np.ndarra
     if n == 1:
         axes = [axes]
     
-    tau_list = np.linspace(0.5, 1.05, 50)
+    tau_list = np.linspace(0.75, 1.05, 50)
     
     for si, (ax, size) in enumerate(zip(axes, TEST_SIZES)):
         score_dict = score_dict_per_size.get(size, {})
