@@ -29,6 +29,8 @@ def load_config():
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, required=True)
+    parser.add_argument("--diagnose", action="store_true",
+                        help="Enable pooling diagnostics")
     args = parser.parse_args()
 
     config = load_config()
@@ -37,7 +39,7 @@ def main():
     os.makedirs(save_dir, exist_ok=True)
 
     # Test sets to run (folder names under ./data_test/)
-    DATA_PATHS = ["20010", "Mk"]
+    DATA_PATHS = ["1005", "1510", "2005", "2010", "3010", "4010", "5010", "10010", "20010"]
     # (sample, suffix): greedy is DRL-G, sample is DRL-S
     MODES = [(False, "greedy")]
     # MODES = [(False, "greedy"), (True, "sample")]  # uncomment to also run sampling
@@ -60,12 +62,15 @@ def main():
             num_ins = NUM_INS.get(data_path, DEFAULT_NUM_INS)
             print("\n=== Running test: data_path={0}, sample={1} -> {2} ===".format(
                 data_path, sample, target_name))
-            result = subprocess.run([sys.executable, "test.py",
-                     "--seed", str(args.seed),
-                     "--data_path", data_path,
-                     "--sample", str(sample),
-                     "--num_ins", str(num_ins),
-                     "--output_dir", target_path])
+            cmd = [sys.executable, "test.py",
+                   "--seed", str(args.seed),
+                   "--data_path", data_path,
+                   "--sample", str(sample),
+                   "--num_ins", str(num_ins),
+                   "--output_dir", target_path]
+            if args.diagnose:
+                cmd.append("--diagnose")
+            result = subprocess.run(cmd)
             if result.returncode != 0:
                 print("test.py failed for {0} (exit code {1}), aborting.".format(
                     target_name, result.returncode))

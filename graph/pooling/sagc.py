@@ -24,6 +24,8 @@ class SAGCPool(nn.Module):
         self.k_mode = k_mode
         self.proj = nn.Linear(in_feats + ope_feat_dim, 1, bias=False)
         nn.init.xavier_uniform_(self.proj.weight)
+        self.diagnostic_mode = False
+        self._last_diag = None
 
     def _build_chain_adj(self, top_idx, opes_appertain):
         B, k = top_idx.shape
@@ -124,5 +126,13 @@ class SAGCPool(nn.Module):
             "completed_opes_pooled":  completed_opes_pooled,
             "ope_feats_pooled":       ope_feats_pooled,
         }
+
+        if self.diagnostic_mode:
+            self._last_diag = {
+                "gate_scores_raw": gate_scores.detach().cpu(),
+                "sel_scores": sel_scores.detach().cpu(),
+                "top_idx": top_idx.detach().cpu(),
+                "k": k,
+            }
 
         return h_pooled, pre_pooled, sub_pooled, ope_ma_pooled, proc_pooled, pool_info

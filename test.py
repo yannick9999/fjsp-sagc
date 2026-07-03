@@ -13,6 +13,11 @@ import pynvml
 import PPO_model
 from env.fjsp_env import FJSPEnv
 from env.load_data import nums_detec
+from utils.diagnostics import (
+    compute_node_categories,
+    compute_step_metrics,
+    compute_random_baseline_metrics,
+)
 
 def format_time(seconds):
     seconds = int(seconds)
@@ -39,6 +44,8 @@ def main():
                         help="Number of instances to evaluate")
     parser.add_argument("--output_dir", type=str, required=True,
                         help="Directory to write test results into")
+    parser.add_argument("--diagnose", action="store_true",
+                        help="Enable pooling diagnostics (collects per-step metrics)")
     args = parser.parse_args()
 
     # PyTorch initialization
@@ -104,6 +111,7 @@ def main():
     if has_graph_unet:
         model.policy_old.graph_unet._timing_enabled = True
     coarsening_rows = []
+    all_diagnostic_records = []
     ckpt_pooling_cfg = None  # filled from checkpoint, used for metadata sheet
 
     # Detect and add models to "rules"
@@ -160,7 +168,15 @@ def main():
 
             model.policy.load_state_dict(state_dict)
             model.policy_old.load_state_dict(state_dict)
+            if args.diagnose and hasattr(model.policy_old, 'graph_unet'):
+                for pool in model.policy_old.graph_unet.pools:
+                    if hasattr(pool, 'diagnostic_mode'):
+                        pool.diagnostic_mode = True
         print('rule:', rule)
+
+        pool_layer = None
+        if args.diagnose and hasattr(model.policy_old, 'graph_unet'):
+            pool_layer = model.policy_old.graph_unet.pools[0]
 
         # Schedule instance by instance
         step_time_last = time.time()
@@ -201,20 +217,31 @@ def main():
                 model.policy_old.graph_unet.reset_timing()
             # DRL-S
             if test_paras["sample"]:
-                makespan, time_re = schedule(env, model, memories, flag_sample=test_paras["sample"])
+                makespan, time_re, step_records = schedule(
+                    env, model, memories, flag_sample=test_paras["sample"],
+                    diagnose=args.diagnose, pool_layer=pool_layer)
                 makespans.append(torch.min(makespan).item())
                 times.append(time_re)
             # DRL-G
             else:
                 time_s = []
                 makespan_s = []  # In fact, the results obtained by DRL-G do not change
+                step_records = []
                 for j in range(test_paras["num_average"]):
-                    makespan, time_re = schedule(env, model, memories)
+                    makespan, time_re, sr = schedule(
+                        env, model, memories,
+                        diagnose=args.diagnose, pool_layer=pool_layer)
                     makespan_s.append(makespan)
                     time_s.append(time_re)
+                    if j == 0:
+                        step_records = sr
                     env.reset()
                 makespans.append(torch.mean(torch.tensor(makespan_s)).item())
                 times.append(torch.mean(torch.tensor(time_s)).item())
+            for rec in step_records:
+                rec["instance"] = test_files[i_ins]
+                rec["rule"] = rule
+                all_diagnostic_records.append(rec)
             if has_graph_unet:
                 _stats = model.policy_old.graph_unet.get_timing_stats()
                 _n_dec = model.policy_old.graph_unet._n_calls
@@ -288,6 +315,12 @@ def main():
     df_meta = pd.DataFrame(metadata, columns=["key", "value"])
 
     # Write all sheets into a single Excel file
+    if args.diagnose and all_diagnostic_records:
+        df_diag = pd.DataFrame(all_diagnostic_records)
+        diag_csv = os.path.join(save_path, "diagnostics_{0}.csv".format(str_time))
+        df_diag.to_csv(diag_csv, index=False)
+        print("Saved {0} diagnostic records to {1}".format(len(df_diag), diag_csv))
+
     out_path = '{0}/test_results_{1}.xlsx'.format(save_path, str_time)
     with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
         df_makespan.to_excel(writer, sheet_name='makespan', index=False)
@@ -297,27 +330,37 @@ def main():
 
     print("total_spend_time: ", total_runtime_sec)
 
-def schedule(env, model, memories, flag_sample=False):
-    # Get state and completion signal
+def schedule(env, model, memories, flag_sample=False, diagnose=False, pool_layer=None):
     state = env.state
     dones = env.done_batch
-    done = False  # Unfinished at the beginning
+    done = False
     last_time = time.time()
     i = 0
+    step_records = []
     while ~done:
         i += 1
         with torch.no_grad():
             actions = model.policy_old.act(state, memories, dones, flag_sample=flag_sample, flag_train=False)
-        state, rewards, dones = env.step(actions)  # environment transit
+        if diagnose and pool_layer is not None and pool_layer._last_diag is not None:
+            cats = compute_node_categories(state, env, batch_idx=0)
+            diag = pool_layer._last_diag
+            k = diag["k"]
+            metrics_learned = compute_step_metrics(diag, cats, env, batch_idx=0)
+            metrics_learned["step"] = i - 1
+            metrics_learned["method"] = "learned"
+            step_records.append(metrics_learned)
+            metrics_random = compute_random_baseline_metrics(cats, k, env, batch_idx=0, n_samples=10)
+            metrics_random["step"] = i - 1
+            metrics_random["method"] = "random"
+            step_records.append(metrics_random)
+        state, _, dones = env.step(actions)
         done = dones.all()
-    spend_time = time.time() - last_time  # The time taken to solve this environment (instance)
-    # print("spend_time: ", spend_time)
+    spend_time = time.time() - last_time
 
-    # Verify the solution
     gantt_result = env.validate_gantt()[0]
     if not gantt_result:
         print("Scheduling Error！！！！！！")
-    return copy.deepcopy(env.makespan_batch), spend_time
+    return copy.deepcopy(env.makespan_batch), spend_time, step_records
 
 
 if __name__ == '__main__':
