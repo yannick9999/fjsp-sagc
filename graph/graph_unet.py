@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .hgnn import GATedge, MLPsim
-from .pooling import build_pooling, build_unpooling
+from .pooling import build_pooling
 
 
 class MLPs(nn.Module):
@@ -88,12 +88,12 @@ class GCNBlock(nn.Module):
 
 class GraphUNet(nn.Module):
     '''
-    Variable-depth Graph U-Net for the FJSP operation graph.
+    Variable-depth Graph U-Net for the FJSP operation graph (encoder-only).
     Structure for num_pool_layers = L:
         gcn_0 -> pool_1 -> gcn_1 -> ... -> pool_L -> gcn_L (bottleneck)
                                                            |
-        gcn_2L <- unpool_1 <- gcn_2L-1 <- ... <- unpool_L <+
-    Returns full-size operation embeddings and machine embeddings at full resolution.
+                                                  decision on pooled graph
+    Total GCN layers: L+1. Returns pooled operation embeddings and machine embeddings.
     '''
     def __init__(self, model_paras):
         super().__init__()
@@ -108,7 +108,7 @@ class GraphUNet(nn.Module):
         self.num_pool_layers = num_pool_layers
 
         self.gcns = nn.ModuleList()
-        for i in range(2 * num_pool_layers + 1):
+        for i in range(num_pool_layers + 1):
             if i == 0:
                 self.gcns.append(GCNBlock(in_size_ope, in_size_ma, d_ope, d_ma,
                                           hidden_size_ope, num_head, dropout))
@@ -116,8 +116,7 @@ class GraphUNet(nn.Module):
                 self.gcns.append(GCNBlock(d_ope, d_ma, d_ope, d_ma,
                                           hidden_size_ope, num_head, dropout))
 
-        self.pools   = nn.ModuleList([build_pooling(model_paras)   for _ in range(num_pool_layers)])
-        self.unpools = nn.ModuleList([build_unpooling(model_paras) for _ in range(num_pool_layers)])
+        self.pools = nn.ModuleList([build_pooling(model_paras) for _ in range(num_pool_layers)])
 
         # coarsening overhead timing, disabled by default so training is unaffected
         self._timing_enabled = False
@@ -156,8 +155,10 @@ class GraphUNet(nn.Module):
             eligible_opes  [B, N] bool, True = must not be pooled
             completed_opes [B, N] bool, True = completed, exclude from pooling
         Returns:
-            h_opes [B, N, out_size_ope]
-            h_mas  [B, M, out_size_ma]
+            h_opes       [B, k, out_size_ope]   (k = pooled size; k = N if no pooling)
+            h_mas        [B, M, out_size_ma]
+            composed_idx [B, k] mapping pooled positions → original positions,
+                         or None when no actual remapping occurred (IdentityPool)
         '''
         B = raw_opes.size(0)
         batch_idxes = torch.arange(B, device=raw_opes.device)
@@ -173,8 +174,7 @@ class GraphUNet(nn.Module):
         h_opes, h_mas = self.gcns[0](raw_opes, raw_mas, proc_time,
                                      ope_ma_adj, ope_pre_adj, ope_sub_adj, batch_idxes)
 
-        # down path: push skip, pool, GCN
-        skips = []
+        # down (encoder) path: pool then GCN at each level
         cur_pre, cur_sub = ope_pre_adj, ope_sub_adj
         cur_ma,  cur_proc = ope_ma_adj, proc_time
         cur_nums_opes = nums_opes
@@ -182,11 +182,9 @@ class GraphUNet(nn.Module):
         cur_eligible  = eligible_opes
         cur_completed = completed_opes
         cur_ope_feats = raw_opes
+        composed_idx  = None  # [B, k] pooled → original, built up across layers
 
         for i in range(L):
-            skips.append({"h": h_opes, "pre": cur_pre, "sub": cur_sub,
-                          "ma": cur_ma, "proc": cur_proc})
-
             if self._timing_enabled:
                 if _is_cuda:
                     torch.cuda.synchronize()
@@ -202,36 +200,23 @@ class GraphUNet(nn.Module):
                     torch.cuda.synchronize()
                 _t_coarse_acc += time.perf_counter() - _t0
 
+            top_idx = info.get("top_idx")  # [B, k_i] or None for IdentityPool
+            if top_idx is not None:
+                if composed_idx is None:
+                    composed_idx = top_idx
+                else:
+                    # top_idx indexes into the previous pooled graph;
+                    # compose to get mapping back to original positions
+                    composed_idx = composed_idx.gather(1, top_idx)
+
             cur_nums_opes = info["nums_opes_pooled"]
             cur_appertain = info["opes_appertain_pooled"]
             cur_eligible  = info["eligible_opes_pooled"]
             cur_completed = info["completed_opes_pooled"]
             cur_ope_feats = info.get("ope_feats_pooled", cur_ope_feats)
-            skips[-1]["info"] = info
 
             h_opes, h_mas = self.gcns[i + 1](h_opes, h_mas, cur_proc,
                                               cur_ma, cur_pre, cur_sub, batch_idxes)
-
-        # up path: pop skip, unpool, GCN
-        for i in range(L):
-            skip = skips.pop()
-
-            if self._timing_enabled:
-                if _is_cuda:
-                    torch.cuda.synchronize()
-                _t0 = time.perf_counter()
-
-            h_opes = self.unpools[i](h_opes, skip["info"], skip["h"])
-
-            if self._timing_enabled:
-                if _is_cuda:
-                    torch.cuda.synchronize()
-                _t_coarse_acc += time.perf_counter() - _t0
-
-            cur_pre, cur_sub = skip["pre"], skip["sub"]
-            cur_ma,  cur_proc = skip["ma"],  skip["proc"]
-            h_opes, h_mas = self.gcns[L + 1 + i](h_opes, h_mas, cur_proc,
-                                                  cur_ma, cur_pre, cur_sub, batch_idxes)
 
         if self._timing_enabled:
             if _is_cuda:
@@ -240,4 +225,4 @@ class GraphUNet(nn.Module):
             self._t_forward_total += time.perf_counter() - _t_fwd_start
             self._n_calls += 1
 
-        return h_opes, h_mas
+        return h_opes, h_mas, composed_idx

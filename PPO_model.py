@@ -209,7 +209,7 @@ class HGNNScheduler(nn.Module):
         '''
         All inputs already indexed to the active batch.
         features = (raw_opes, raw_mas, proc_time)
-        returns h_opes [B, N, d_ope], h_mas [B, M, d_ma]
+        returns h_opes [B, k, d_ope], h_mas [B, M, d_ma], composed_idx [B, k] or None
         '''
         B = features[0].size(0)
         batch_idxes = torch.arange(B, device=features[0].device)
@@ -226,7 +226,31 @@ class HGNNScheduler(nn.Module):
             h_opes = self.get_operations[i](ope_ma_adj, ope_pre_adj, ope_sub_adj,
                                             batch_idxes, features)
             features = (h_opes, features[1], features[2])
-        return h_opes, h_mas
+        return h_opes, h_mas, None
+
+    def _remap_jobs_gather(self, composed_idx, ope_step, h_opes_dim, N_original):
+        '''
+        Remap operation step indices from original graph positions to pooled positions.
+
+        Args:
+            composed_idx: [B, k] mapping pooled → original, or None
+            ope_step:     [B, num_jobs] original operation indices
+            h_opes_dim:   last dimension of h_opes (for expanding)
+            N_original:   number of nodes in the original (unpooled) graph
+
+        Returns:
+            jobs_gather: [B, num_jobs, h_opes_dim] ready for h_opes.gather(1, ...)
+        '''
+        if composed_idx is None:
+            return ope_step[..., :, None].expand(-1, -1, h_opes_dim)
+
+        B, k = composed_idx.shape
+        device = composed_idx.device
+        reverse_map = torch.full((B, N_original), 0, device=device, dtype=composed_idx.dtype)
+        pooled_positions = torch.arange(k, device=device).unsqueeze(0).expand(B, -1)
+        reverse_map.scatter_(1, composed_idx, pooled_positions)
+        ope_step_pooled = reverse_map.gather(1, ope_step)
+        return ope_step_pooled[..., :, None].expand(-1, -1, h_opes_dim)
 
     def get_action_prob(self, state, memories, flag_sample=False, flag_train=False):
         '''
@@ -282,13 +306,16 @@ class HGNNScheduler(nn.Module):
         op_indices = torch.arange(N, device=features[0].device).unsqueeze(0).expand(B_active, -1)
         completed_opes = op_indices < current_step_per_op
 
-        h_opes, h_mas = self.embed(ope_ma_adj, ope_pre_adj, ope_sub_adj, features, nums_opes,
-                                   opes_appertain, eligible_opes, completed_opes)
+        h_opes, h_mas, composed_idx = self.embed(ope_ma_adj, ope_pre_adj, ope_sub_adj, features, nums_opes,
+                                                  opes_appertain, eligible_opes, completed_opes)
 
         # Stacking and pooling
         h_mas_pooled = h_mas.mean(dim=-2)  # shape: [len(batch_idxes), out_size_ma]
-        # There may be different operations for each instance, which cannot be pooled directly by the matrix
-        if not flag_sample and not flag_train:
+        # When composed_idx is not None, h_opes is already the pooled (sub)graph — all nodes valid.
+        # When composed_idx is None (nopooling / song_baseline), fall back to original logic.
+        if composed_idx is not None:
+            h_opes_pooled = h_opes.mean(dim=-2)
+        elif not flag_sample and not flag_train:
             h_opes_pooled = []
             for i in range(len(batch_idxes)):
                 h_opes_pooled.append(torch.mean(h_opes[i, :nums_opes[i], :], dim=-2))
@@ -296,9 +323,15 @@ class HGNNScheduler(nn.Module):
         else:
             h_opes_pooled = h_opes.mean(dim=-2)  # shape: [len(batch_idxes), out_size_ope]
 
-        # Detect eligible O-M pairs (eligible actions) and generate tensors for actor calculation
+        # Detect eligible O-M pairs (eligible actions) and generate tensors for actor calculation.
+        # jobs_gather uses original indices and is stored in memory for later evaluate() calls.
         jobs_gather = ope_step_batch[..., :, None].expand(-1, -1, h_opes.size(-1))[batch_idxes]
-        h_jobs = h_opes.gather(1, jobs_gather)
+        # Remap to pooled positions for gathering from h_opes (which may now be [B, k, d]).
+        N_original = features[0].size(1)
+        ope_step_active = ope_step_batch[batch_idxes]
+        jobs_gather_pooled = self._remap_jobs_gather(composed_idx, ope_step_active,
+                                                     h_opes.size(-1), N_original)
+        h_jobs = h_opes.gather(1, jobs_gather_pooled)
         h_jobs_padding = h_jobs.unsqueeze(-2).expand(-1, -1, state.proc_times_batch.size(-1), -1)
         h_mas_padding = h_mas.unsqueeze(-3).expand_as(h_jobs_padding)
         h_mas_pooled_padding = h_mas_pooled[:, None, None, :].expand_as(h_jobs_padding)
@@ -364,7 +397,7 @@ class HGNNScheduler(nn.Module):
                  jobs_gather, eligible, nums_opes, opes_appertain, action_envs, flag_sample=False):
         features = (raw_opes, raw_mas, proc_time)
 
-        ope_step = jobs_gather[..., 0]                       # [B, num_jobs]
+        ope_step = jobs_gather[..., 0]                       # [B, num_jobs] original indices
         N = raw_opes.size(1)
         job_truly_eligible = eligible.any(dim=-1)  # [B, num_jobs]
         eligible_opes = torch.zeros(raw_opes.size(0), N, dtype=torch.bool, device=raw_opes.device)
@@ -375,12 +408,16 @@ class HGNNScheduler(nn.Module):
         op_indices = torch.arange(N, device=raw_opes.device).unsqueeze(0).expand(B, -1)
         completed_opes = op_indices < current_step_per_op
 
-        h_opes, h_mas = self.embed(ope_ma_adj, ope_pre_adj, ope_sub_adj,
-                                   features, nums_opes, opes_appertain, eligible_opes, completed_opes)
+        h_opes, h_mas, composed_idx = self.embed(ope_ma_adj, ope_pre_adj, ope_sub_adj,
+                                                  features, nums_opes, opes_appertain,
+                                                  eligible_opes, completed_opes)
 
         # Stacking and pooling
         h_mas_pooled = h_mas.mean(dim=-2)
         h_opes_pooled = h_opes.mean(dim=-2)
+
+        # Remap stored original indices to pooled positions if needed.
+        jobs_gather = self._remap_jobs_gather(composed_idx, ope_step, h_opes.size(-1), N)
 
         # Detect eligible O-M pairs (eligible actions) and generate tensors for critic calculation
         h_jobs = h_opes.gather(1, jobs_gather)
