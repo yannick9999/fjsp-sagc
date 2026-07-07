@@ -63,9 +63,11 @@ METHOD_COLORS = {"sagc": "#1f77b4", "nopooling": "#ff7f0e"}
 SEEDS = [0, 1, 2]
 
 # Testgroessen, einmal als "Anzeige" (mit x) und einmal als Ordnername (ohne x)
-# Ergaenze hier "200x10" sobald die Daten da sind.
-TEST_SIZES = ["20x10", "50x10", "100x10", "200x10"]
+TEST_SIZES = ["10x5", "15x10", "20x5", "20x10", "50x10", "100x10", "200x10"]
 SIZE_FOLDER_MAP = {
+    "10x5": "1005",
+    "15x10": "1510",
+    "20x5": "2005",
     "20x10": "2010",
     "50x10": "5010",
     "100x10": "10010",
