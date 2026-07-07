@@ -40,6 +40,7 @@ def main():
 
     # Test sets to run (folder names under ./data_test/)
     DATA_PATHS = ["1005", "1510", "2005", "2010", "3010", "4010", "5010", "10010", "20010"]
+    # DATA_PATHS = ["10010", "20010"]
     # (sample, suffix): greedy is DRL-G, sample is DRL-S
     MODES = [(False, "greedy")]
     # MODES = [(False, "greedy"), (True, "sample")]  # uncomment to also run sampling

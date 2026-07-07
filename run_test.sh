@@ -5,7 +5,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=24
 #SBATCH --gpus-per-node=1
-#SBATCH --time=12:00:00
+#SBATCH --time=24:00:00
 #SBATCH --array=0-2
 #SBATCH --output=logs/test_seed%a_%j.out
 #SBATCH --error=logs/test_seed%a_%j.err
@@ -39,4 +39,5 @@ fi
 echo "=== Testing seed=${SEED} exp=${EXP_NAME} model_dir=${MODEL_DIR} ==="
 srun nvidia-smi || true
 
-exec srun "${PYTHON}" run_test_suite.py --seed "${SEED}" --diagnose
+# exec srun "${PYTHON}" run_test_suite.py --seed "${SEED}" --diagnose
+exec srun "${PYTHON}" run_test_suite.py --seed "${SEED}"

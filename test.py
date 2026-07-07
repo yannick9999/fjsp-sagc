@@ -219,7 +219,7 @@ def main():
             if test_paras["sample"]:
                 makespan, time_re, step_records = schedule(
                     env, model, memories, flag_sample=test_paras["sample"],
-                    diagnose=args.diagnose, pool_layer=pool_layer)
+                    diagnose=(args.diagnose and i_ins<5), pool_layer=pool_layer)
                 makespans.append(torch.min(makespan).item())
                 times.append(time_re)
             # DRL-G
@@ -230,7 +230,7 @@ def main():
                 for j in range(test_paras["num_average"]):
                     makespan, time_re, sr = schedule(
                         env, model, memories,
-                        diagnose=args.diagnose, pool_layer=pool_layer)
+                        diagnose=(args.diagnose and i_ins<5), pool_layer=pool_layer)
                     makespan_s.append(makespan)
                     time_s.append(time_re)
                     if j == 0:

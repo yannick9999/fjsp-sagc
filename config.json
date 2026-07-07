@@ -1,6 +1,6 @@
 {
   "experiment": {
-    "name": "sagc_no_unpooling_20x10"
+    "name": "nopooling_no_unpooling_20x10"
   },
   "env_paras": {
     "num_jobs": 20,
@@ -25,7 +25,7 @@
     "n_hidden_critic": 3,
     "action_dim": 1,
     "pooling": {
-        "method": "sagc",
+        "method": "nopooling",
         "ratio": 2.0,
         "k_mode": "jobs",
         "num_layers": 1

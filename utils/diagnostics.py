@@ -91,8 +91,8 @@ def compute_step_metrics(diag, cats, env, batch_idx=0):
     Returns a flat dict of scalar metrics.
     """
     b = batch_idx
-    gate_scores = diag["gate_scores_raw"][b]   # [N], CPU
-    top_idx = diag["top_idx"][b]               # [k], CPU
+    gate_scores = diag["gate_scores_raw"][b].cpu()
+    top_idx = diag["top_idx"][b].cpu()
     k = diag["k"]
 
     N = cats["N"]
@@ -105,7 +105,7 @@ def compute_step_metrics(diag, cats, env, batch_idx=0):
     slack                = cats["slack"]
     frontier_dist        = cats["frontier_dist"]
 
-    kept_mask = torch.zeros(N, dtype=torch.bool)
+    kept_mask = torch.zeros(N, dtype=torch.bool, device='cpu')
     kept_mask[top_idx] = True
 
     # --- 1. Spearman correlation: gate scores vs slack (decision-relevant only) ---
@@ -218,12 +218,12 @@ def compute_random_baseline_metrics(cats, k, env, batch_idx=0, n_samples=10):
     accumulators = {}
 
     for _ in range(n_samples):
-        perm       = torch.randperm(non_elig_selectable.shape[0])[:n_extra]
+        perm = torch.randperm(non_elig_selectable.shape[0], device='cpu')[:n_extra]
         random_extra = non_elig_selectable[perm]
         top_idx, _ = torch.sort(torch.cat([eligible_indices, random_extra]))
 
         fake_diag = {
-            "gate_scores_raw": torch.rand(N).unsqueeze(0),
+            "gate_scores_raw": torch.rand(N, device='cpu').unsqueeze(0),
             "top_idx":         top_idx.unsqueeze(0),
             "k":               k,
         }
