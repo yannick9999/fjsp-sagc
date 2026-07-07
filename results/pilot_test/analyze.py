@@ -12,7 +12,7 @@ Erzeugt folgende Outputs im Ordner ./plots/:
 Datenstruktur (relativ zum Speicherort dieses Skripts):
   ./{method}_20x10/seed{s}/train_results_*.xlsx                # Training
   ./{method}_20x10/test/seed{s}/{size_folder}_greedy/test_*.xlsx  # Test
-  ../benchmarks/{rule}/{size}.csv                              # DR Benchmarks
+  ../benchmarks/{rule}/{size_folder}.csv                       # DR Benchmarks
 
 Pluggable:
   - Neue Methoden in METHODS hinzufuegen
@@ -70,7 +70,7 @@ SIZE_FOLDER_MAP = {
     "50x10": "5010",
     "100x10": "10010",
     "200x10": "20010",
-    "Mk": "Mk",
+    "Mk": "brandimarte",
 }
 
 # Brandimarte separat, nur fuer die Gap-Tabelle am Schluss
@@ -149,7 +149,7 @@ def load_benchmark_makespans(rule: str, size: str) -> dict[str, float] | None:
     Returns:
         Dict {instance_name: makespan} oder None falls Datei fehlt.
     """
-    csv = BENCHMARKS_DIR / rule / f"{size}.csv"
+    csv = BENCHMARKS_DIR / rule / f"{SIZE_FOLDER_MAP[size]}.csv"
     if not csv.exists():
         return None
     df = pd.read_csv(csv)
