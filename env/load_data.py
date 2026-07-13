@@ -7,6 +7,10 @@ def load_fjs(lines, num_mas, num_opes):
     '''
     flag = 0
     matrix_proc_time = torch.zeros(size=(num_opes, num_mas))
+    # Compatibility is tracked separately from proc_time: a machine can be genuinely
+    # compatible with proc_time 0 (occurs in real benchmark instances, e.g. orb7.fjs),
+    # which would be indistinguishable from "incompatible" if derived from proc_time > 0.
+    matrix_ope_ma_adj = torch.zeros(size=(num_opes, num_mas), dtype=torch.int64)
     matrix_pre_proc = torch.full(size=(num_opes, num_opes), dtype=torch.bool, fill_value=False)
     matrix_cal_cumul = torch.zeros(size=(num_opes, num_opes)).int()
     nums_ope = []  # A list of the number of operations for each job
@@ -25,12 +29,11 @@ def load_fjs(lines, num_mas, num_opes):
             num_ope_bias = int(sum(nums_ope))  # The id of the first operation of this job
             num_ope_biases.append(num_ope_bias)
             # Detect information of this job and return the number of operations
-            num_ope = edge_detec(line, num_ope_bias, matrix_proc_time, matrix_pre_proc, matrix_cal_cumul)
+            num_ope = edge_detec(line, num_ope_bias, matrix_proc_time, matrix_ope_ma_adj, matrix_pre_proc, matrix_cal_cumul)
             nums_ope.append(num_ope)
             # nums_option = np.concatenate((nums_option, num_option))
             opes_appertain = np.concatenate((opes_appertain, np.ones(num_ope)*(flag-1)))
             flag += 1
-    matrix_ope_ma_adj = torch.where(matrix_proc_time > 0, 1, 0)
     # Fill zero if the operations are insufficient (for parallel computation)
     opes_appertain = np.concatenate((opes_appertain, np.zeros(num_opes-opes_appertain.size)))
     return matrix_proc_time, matrix_ope_ma_adj, matrix_pre_proc, matrix_pre_proc.t(), \
@@ -49,7 +52,7 @@ def nums_detec(lines):
     num_mas = int(line_split[1])
     return num_jobs, num_mas, num_opes
 
-def edge_detec(line, num_ope_bias, matrix_proc_time, matrix_pre_proc, matrix_cal_cumul):
+def edge_detec(line, num_ope_bias, matrix_proc_time, matrix_ope_ma_adj, matrix_pre_proc, matrix_cal_cumul):
     '''
     Detect information of a job
     '''
@@ -87,6 +90,7 @@ def edge_detec(line, num_ope_bias, matrix_proc_time, matrix_pre_proc, matrix_cal
         # proc_time
         else:
             matrix_proc_time[idx_ope+num_ope_bias][mac] = x
+            matrix_ope_ma_adj[idx_ope+num_ope_bias][mac] = 1
             flag += 1
             flag_time = 0
     return num_ope

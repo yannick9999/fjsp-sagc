@@ -299,9 +299,21 @@ class FJSPEnv(gym.Env):
 
         # Check if there are still O-M pairs to be processed, otherwise the environment transits to the next time
         flag_trans_2_next_time = self.if_no_eligible()
+        _safety = 0
         while ~((~((flag_trans_2_next_time==0) & (~self.done_batch))).all()):
             self.next_time(flag_trans_2_next_time)
             flag_trans_2_next_time = self.if_no_eligible()
+            _safety += 1
+            if _safety > 10 * self.num_mas:
+                stuck = (flag_trans_2_next_time == 0) & (~self.done_batch)
+                print(f"ERROR: next_time loop stuck after {_safety} iterations")
+                print(f"  self.time={self.time}")
+                print(f"  stuck batch indices: {stuck.nonzero()}")
+                print(f"  machines available_time: {self.machines_batch[stuck, :, 1]}")
+                print(f"  machines processing:     {self.machines_batch[stuck, :, 0]}")
+                print(f"  mask_ma_procing: {self.mask_ma_procing_batch[stuck]}")
+                print(f"  flag_trans: {flag_trans_2_next_time}")
+                break
 
         # Update the vector for uncompleted instances
         mask_finish = (self.N+1) <= self.nums_opes
@@ -320,12 +332,16 @@ class FJSPEnv(gym.Env):
         '''
         ope_step_batch = torch.where(self.ope_step_batch > self.end_ope_biases_batch,
                                      self.end_ope_biases_batch, self.ope_step_batch)
-        op_proc_time = self.proc_times_batch.gather(1, ope_step_batch.unsqueeze(-1).expand(-1, -1,
-                                                                                        self.proc_times_batch.size(2)))
-        ma_eligible = ~self.mask_ma_procing_batch.unsqueeze(1).expand_as(op_proc_time)
+        # Use the O-M compatibility adjacency (not proc_times_batch) to determine eligibility:
+        # proc_times_batch is 0 both for genuinely-incompatible pairs AND for compatible pairs
+        # whose real processing time is 0 (occurs in real benchmark instances, e.g. orb7.fjs),
+        # so a proc_time>0 check wrongly treats zero-duration-but-eligible ops as ineligible.
+        op_ma_adj = self.ope_ma_adj_batch.gather(1, ope_step_batch.unsqueeze(-1).expand(-1, -1,
+                                                                                        self.ope_ma_adj_batch.size(2)))
+        ma_eligible = ~self.mask_ma_procing_batch.unsqueeze(1).expand_as(op_ma_adj)
         job_eligible = ~(self.mask_job_procing_batch + self.mask_job_finish_batch)[:, :, None].expand_as(
-            op_proc_time)
-        flag_trans_2_next_time = torch.sum(torch.where(ma_eligible & job_eligible, op_proc_time.double(), 0.0).transpose(1, 2),
+            op_ma_adj)
+        flag_trans_2_next_time = torch.sum(torch.where(ma_eligible & job_eligible & (op_ma_adj == 1), 1, 0).transpose(1, 2),
                                            dim=[1, 2])
         # shape: (batch_size)
         # An element value of 0 means that the corresponding instance has no eligible O-M pairs
@@ -340,12 +356,16 @@ class FJSPEnv(gym.Env):
         flag_need_trans = (flag_trans_2_next_time==0) & (~self.done_batch)
         # available_time of machines
         a = self.machines_batch[:, :, 1]
+        # only currently busy machines are candidates for the next transition time;
+        # idle machines default available_time to 0, which would otherwise wrongly
+        # win the min() below whenever self.time == 0
+        is_busy = self.machines_batch[:, :, 0] == 0
         # remain available_time greater than current time
-        b = torch.where(a > self.time[:, None], a, torch.max(self.feat_opes_batch[:, 4, :]) + 1.0)
+        b = torch.where(is_busy & (a >= self.time[:, None]), a, torch.max(self.feat_opes_batch[:, 4, :]) + 1.0)
         # Return the minimum value of available_time (the time to transit to)
         c = torch.min(b, dim=1)[0]
         # Detect the machines that completed (at above time)
-        d = torch.where((a == c[:, None]) & (self.machines_batch[:, :, 0] == 0) & flag_need_trans[:, None], True, False)
+        d = torch.where((a == c[:, None]) & is_busy & flag_need_trans[:, None], True, False)
         # The time for each batch to transit to or stay in
         e = torch.where(flag_need_trans, c, self.time)
         self.time = e
