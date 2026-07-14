@@ -1,16 +1,4 @@
-"""
-Pooling Diagnostics, Summary Plots and Score Table
-
-Folder structure (relative to this script):
-  ./data/seed{s}/{size_folder}_greedy/diagnostics_*.csv
-
-Output:
-  ./plots/table_pooling_scores.png
-  ./plots/episode_critical_retention.png
-  ./plots/episode_successor_retention.png
-  ./plots/episode_slack_correlation.png
-  ./plots/episode_frontier_dist.png
-"""
+"""Pooling diagnostics: summary plots and score table."""
 
 from pathlib import Path
 import numpy as np
@@ -19,7 +7,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-# ── Config ────────────────────────────────────────────────────────────────────
+# Config
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 DATA_DIR   = SCRIPT_DIR / "data"
@@ -56,7 +44,7 @@ RANDOM_STYLE = dict(color=RANDOM_COLOR, linestyle="--", linewidth=1.8,
 EPISODE_BINS = 10
 
 
-# ── Data loading ──────────────────────────────────────────────────────────────
+# Data loading
 
 def load_size(size: str):
     folder = SIZE_FOLDER_MAP[size]
@@ -90,7 +78,7 @@ def load_all():
     return data
 
 
-# ── Score computation ─────────────────────────────────────────────────────────
+# Score computation
 
 def instance_scores_delta(df, metric, normalize_by=None):
     """
@@ -126,7 +114,7 @@ def instance_scores_learned(df, metric):
     return np.array(scores)
 
 
-# ── Score table ───────────────────────────────────────────────────────────────
+# Score table
 
 def compute_table(data):
     records = []
@@ -150,64 +138,13 @@ def compute_table(data):
     return pd.DataFrame(records).set_index("size")
 
 
-def fmt(mean, std):
-    if np.isnan(mean):
-        return "n/a"
-    return f"{mean:+.3f}\n\u00b1{std:.3f}"
+def save_table(table):
+    path = OUT_DIR / "table_pooling_scores.xlsx"
+    table.to_excel(path)
+    print(f"  Saved {path.name}")
 
 
-def plot_table(table):
-    sizes = list(table.index)
-
-    row_labels = [
-        "Critical retention\n(\u0394 learned\u2013random, higher is better)",
-        "Successor retention\n(\u0394 learned\u2013random, higher is better)",
-        "Frontier dist (norm.)\n(\u0394 learned\u2013random, lower is better)",
-        "Slack correlation\n(learned only, lower is better)",
-    ]
-    prefixes = ["crit", "succ", "front", "slack"]
-
-    cell_text = []
-    for prefix in prefixes:
-        row = []
-        for size in sizes:
-            if size not in table.index:
-                row.append("n/a")
-            else:
-                row.append(fmt(table.loc[size, f"{prefix}_mean"],
-                               table.loc[size, f"{prefix}_std"]))
-        cell_text.append(row)
-
-    fig, ax = plt.subplots(figsize=(16, 4))
-    ax.axis("off")
-
-    tbl = ax.table(
-        cellText=cell_text,
-        rowLabels=row_labels,
-        colLabels=sizes,
-        loc="center",
-        cellLoc="center",
-    )
-    tbl.auto_set_font_size(False)
-    tbl.set_fontsize(8)
-    tbl.scale(1, 3.0)
-
-    for (r, c), cell in tbl.get_celld().items():
-        if r == 0 or c == -1:
-            cell.set_facecolor("#2c3e50")
-            cell.set_text_props(color="white", fontweight="bold")
-        else:
-            cell.set_facecolor("#ecf0f1" if r % 2 == 0 else "white")
-
-    ax.set_title("Pooling quality scores (mean +/- std over instances)",
-                 fontsize=12, fontweight="bold", pad=20)
-    fig.tight_layout()
-    fig.savefig(OUT_DIR / "table_pooling_scores.png", dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    print("  Saved table_pooling_scores.png")
-
-
-# ── Episode helpers ───────────────────────────────────────────────────────────
+# Episode helpers
 
 def binned_mean(df, method, metric):
     sub = df[df["method"] == method].copy()
@@ -225,7 +162,7 @@ def averaged_random(data, metric):
     return pd.concat(curves, axis=1).mean(axis=1)
 
 
-# ── Episode plots ─────────────────────────────────────────────────────────────
+# Episode plots
 
 def plot_episode(data, metric, ylabel, title, fname, hline=None):
     fig, ax = plt.subplots(figsize=(8, 5))
@@ -274,7 +211,7 @@ def plot_episode_frontier(data):
     print("  Saved episode_frontier_dist.png")
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# Main
 
 def main():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -288,7 +225,7 @@ def main():
     print("\nComputing score table ...")
     table = compute_table(data)
     print(table.to_string())
-    plot_table(table)
+    save_table(table)
 
     print("\nGenerating episode plots ...")
     plot_episode(data, "critical_retention",

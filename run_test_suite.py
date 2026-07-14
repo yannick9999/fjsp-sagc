@@ -40,10 +40,10 @@ def main():
 
     # Test sets to run (folder names under ./data_test/)
     # DATA_PATHS = ["1005", "1510", "2005", "2010", "3010", "4010", "5010", "10010", "20010"]
-    DATA_PATHS = ["edata", "rdata", "vdata"]
+    DATA_PATHS = ["vdata"]
     # (sample, suffix): greedy is DRL-G, sample is DRL-S
-    # MODES = [(False, "greedy")]
-    MODES = [(False, "greedy"), (True, "sample")]  # uncomment to also run sampling
+    MODES = [(True, "sample")]
+    # MODES = [(False, "greedy"), (True, "sample")]  # uncomment to also run sampling
     # Number of instances to use per data_path (defaults to 100 if not listed)
     NUM_INS = {
         "Mk": 10,

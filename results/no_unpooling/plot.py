@@ -105,8 +105,14 @@ def plot_training_curves(data: dict):
 
 
 def plot_iqm_bars(data: dict, sizes: list[str], out_name: str, title: str, figsize: tuple[float, float]):
-    """IQM as a grouped bar chart, no baselines. One bar per (method, mode)."""
-    combos = [(method, mode) for method in METHODS for mode in MODES]
+    """IQM as a grouped bar chart, no baselines. One bar per (method, mode).
+
+    Ordered sample-then-greedy, method innermost (e.g. SAGC_s, NoPooling_s,
+    SAGC_g, NoPooling_g) so that within each mode the methods sit side by
+    side for direct comparison.
+    """
+    mode_order = ["sample", "greedy"]
+    combos = [(method, mode) for mode in mode_order for method in METHODS]
 
     n_sizes = len(sizes)
     n_combos = len(combos)
@@ -120,6 +126,7 @@ def plot_iqm_bars(data: dict, sizes: list[str], out_name: str, title: str, figsi
 
     # Draw bars
     combo_bar_handles = []
+    max_top = 1.04
     for c_idx, (method, mode) in enumerate(combos):
         key = combo_key(method, mode)
         offsets = group_positions + c_idx * bar_width
@@ -132,6 +139,7 @@ def plot_iqm_bars(data: dict, sizes: list[str], out_name: str, title: str, figsi
                 means.append(val)
                 err_low.append(val - entry["cis"][key][0])
                 err_high.append(entry["cis"][key][1] - val)
+                max_top = max(max_top, entry["cis"][key][1])
             else:
                 means.append(0)
                 err_low.append(0)
@@ -150,8 +158,9 @@ def plot_iqm_bars(data: dict, sizes: list[str], out_name: str, title: str, figsi
     ax.set_xticklabels(sizes, fontsize=13)
     ax.set_xlim(group_positions[0] - 0.4, group_positions[-1] + n_combos * bar_width + 0.4)
 
-    # Y-axis
-    ax.set_ylim(0.7, 1.04)
+    # Y-axis -- ceiling grows with the data so bars/error bars that exceed
+    # 1.0 (as some Hurink combos do) stay fully visible instead of clipping.
+    ax.set_ylim(0.7, max_top + 0.02)
     ax.set_ylabel("IQM Score (C_best / C_drl)", fontsize=15, labelpad=8)
     ax.tick_params(axis='y', labelsize=13)
 
@@ -254,10 +263,10 @@ def plot_performance_profiles(data: dict, sizes: list[str], size_labels: dict[st
     for idx in range(n, nrows * ncols):
         axes[divmod(idx, ncols)].axis("off")
 
-    fig.suptitle(suptitle, y=1.04, fontsize=18, fontweight='bold')
+    fig.suptitle(suptitle, y=1.08, fontsize=18, fontweight='bold')
     if legend_handles:
-        fig.legend(handles=legend_handles, loc='upper right',
-                   bbox_to_anchor=(1.0, 1.04), ncol=len(legend_handles),
+        fig.legend(handles=legend_handles, loc='upper center',
+                   bbox_to_anchor=(0.5, 1.0), ncol=len(legend_handles),
                    frameon=True, framealpha=0.9, edgecolor='#CCCCCC', fontsize=13)
 
     fig.tight_layout()

@@ -1,4 +1,4 @@
-size,method,decode_mode,mean_makespan,mean_gap_pct
+size,method,mode,mean_makespan,mean_gap_pct
 10x5,SAGC,Greedy,111.2 +/- 0.6,2.82 +/- 0.52
 10x5,SAGC,Sampling,106.7 +/- 0.1,-1.38 +/- 0.09
 10x5,NoPooling,Greedy,113.3 +/- 0.9,4.83 +/- 0.87
@@ -7,14 +7,6 @@ size,method,decode_mode,mean_makespan,mean_gap_pct
 10x5,SPT,-,142.3,31.71
 10x5,MOR,-,112.4,3.83
 10x5,FIFO,-,131.2,21.29
-20x5,SAGC,Greedy,209.0 +/- 0.6,2.78 +/- 0.32
-20x5,SAGC,Sampling,205.3 +/- 0.2,0.96 +/- 0.12
-20x5,NoPooling,Greedy,209.6 +/- 1.2,3.07 +/- 0.58
-20x5,NoPooling,Sampling,205.7 +/- 0.7,1.13 +/- 0.32
-20x5,MWR,-,204.7,0.59
-20x5,SPT,-,252.7,24.46
-20x5,MOR,-,207.8,2.14
-20x5,FIFO,-,229.0,12.67
 15x10,SAGC,Greedy,166.5 +/- 1.5,4.36 +/- 0.89
 15x10,SAGC,Sampling,164.6 +/- 0.3,3.19 +/- 0.20
 15x10,NoPooling,Greedy,168.2 +/- 1.7,5.44 +/- 1.05
@@ -23,6 +15,14 @@ size,method,decode_mode,mean_makespan,mean_gap_pct
 15x10,SPT,-,221.1,38.61
 15x10,MOR,-,164.7,3.18
 15x10,FIFO,-,202.7,27.10
+20x5,SAGC,Greedy,209.0 +/- 0.6,2.78 +/- 0.32
+20x5,SAGC,Sampling,205.3 +/- 0.2,0.96 +/- 0.12
+20x5,NoPooling,Greedy,209.6 +/- 1.2,3.07 +/- 0.58
+20x5,NoPooling,Sampling,205.7 +/- 0.7,1.13 +/- 0.32
+20x5,MWR,-,204.7,0.59
+20x5,SPT,-,252.7,24.46
+20x5,MOR,-,207.8,2.14
+20x5,FIFO,-,229.0,12.67
 20x10,SAGC,Greedy,216.1 +/- 0.7,5.57 +/- 0.36
 20x10,SAGC,Sampling,214.6 +/- 0.4,4.87 +/- 0.17
 20x10,NoPooling,Greedy,216.3 +/- 0.7,5.67 +/- 0.36
@@ -75,3 +75,27 @@ Mk,MWR,-,186.1,1.11
 Mk,SPT,-,268.0,49.89
 Mk,MOR,-,189.1,3.30
 Mk,FIFO,-,222.6,19.59
+edata,SAGC,Greedy,2038.1 +/- 35.4,-711.63 +/- 16.86
+edata,SAGC,Sampling,1884.0 +/- 8.2,-639.96 +/- 7.51
+edata,NoPooling,Greedy,2063.0 +/- 36.5,-698.00 +/- 14.16
+edata,NoPooling,Sampling,1879.6 +/- 8.4,-647.93 +/- 8.26
+edata,MWR,-,2045.1,3.31
+edata,SPT,-,2045.3,8.68
+edata,MOR,-,2093.9,5.43
+edata,FIFO,-,2243.7,16.70
+rdata,SAGC,Greedy,1651.3 +/- 12.9,-562.96 +/- 33.94
+rdata,SAGC,Sampling,1535.7 +/- 0.6,-525.42 +/- 1.78
+rdata,NoPooling,Greedy,1660.3 +/- 18.6,-554.98 +/- 26.55
+rdata,NoPooling,Sampling,1542.2 +/- 5.0,-518.99 +/- 3.79
+rdata,MWR,-,1687.4,2.03
+rdata,SPT,-,1808.0,12.91
+rdata,MOR,-,1702.7,3.68
+rdata,FIFO,-,1820.1,13.91
+vdata,SAGC,Greedy,1446.9 +/- 17.0,-445.64 +/- 11.41
+vdata,SAGC,Sampling,1396.2 +/- 2.0,-433.69 +/- 2.62
+vdata,NoPooling,Greedy,1454.5 +/- 7.0,-462.41 +/- 14.44
+vdata,NoPooling,Sampling,1401.0 +/- 2.2,-436.13 +/- 2.55
+vdata,MWR,-,1442.6,0.68
+vdata,SPT,-,1617.1,12.58
+vdata,MOR,-,1514.5,3.32
+vdata,FIFO,-,1639.8,12.89
