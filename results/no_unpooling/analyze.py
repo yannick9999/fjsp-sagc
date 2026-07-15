@@ -22,6 +22,7 @@ from common import (
     BASELINES,
     BENCHMARKS_DIR,
     BOOTSTRAP_REPS,
+    EFFICIENCY_SIZES,
     HURINK_DATASETS,
     MK_SIZE,
     METHOD_LABELS,
@@ -86,6 +87,17 @@ def load_drl_training_curve(method: str, seed: int) -> pd.DataFrame | None:
     if excel is None:
         return None
     return pd.read_excel(excel, sheet_name="validation_curve")
+
+
+def load_drl_solve_times(method: str, size: str, seed: int, mode: str = "greedy") -> np.ndarray | None:
+    """Loads per-instance solve_time (wall-clock seconds)."""
+    folder_size = SIZE_FOLDER_MAP[size]
+    folder = SCRIPT_DIR / f"{method}_no_unpooling_20x10" / "test" / f"seed{seed}" / f"{folder_size}_{mode}"
+    excel = _find_excel(folder, "test_results_*.xlsx")
+    if excel is None:
+        return None
+    df = pd.read_excel(excel, sheet_name="solve_time")
+    return df.iloc[:, 1].astype(float).values
 
 
 def load_benchmark_makespans(rule: str, size: str) -> dict[str, float] | None:
@@ -345,6 +357,53 @@ def analyze_scaling(score_dict_per_size: dict[str, dict[str, np.ndarray]],
     return {"methods": methods_result, "baselines": baselines_result}
 
 
+def analyze_efficiency(sizes: list[str]) -> dict:
+    """Solve time and per-decision forward-pass time vs. instance size,
+    sampling mode only (Hurink excluded -- ran on different hardware).
+
+    Mean across seeds, with a min/max band, per method. Coarsening overhead
+    itself (avg_coarse_ms) is negligible for both methods and isn't part of
+    the headline story, so it's left out.
+    """
+    result = {"sizes": sizes, "methods": {}}
+    for method in METHODS:
+        solve_mean, solve_lo, solve_hi = [], [], []
+        fwd_mean, fwd_lo, fwd_hi = [], [], []
+        for size in sizes:
+            solve_per_seed, fwd_per_seed = [], []
+            for s in SEEDS:
+                st = load_drl_solve_times(method, size, s, "sample")
+                ov = load_drl_overhead(method, size, s, "sample")
+                if st is not None and st.size:
+                    solve_per_seed.append(st.mean())
+                if ov is not None and not ov.empty:
+                    fwd_per_seed.append(ov["avg_forward_ms"].astype(float).mean())
+
+            if solve_per_seed:
+                solve_mean.append(float(np.mean(solve_per_seed)))
+                solve_lo.append(float(np.min(solve_per_seed)))
+                solve_hi.append(float(np.max(solve_per_seed)))
+            else:
+                solve_mean.append(np.nan)
+                solve_lo.append(np.nan)
+                solve_hi.append(np.nan)
+
+            if fwd_per_seed:
+                fwd_mean.append(float(np.mean(fwd_per_seed)))
+                fwd_lo.append(float(np.min(fwd_per_seed)))
+                fwd_hi.append(float(np.max(fwd_per_seed)))
+            else:
+                fwd_mean.append(np.nan)
+                fwd_lo.append(np.nan)
+                fwd_hi.append(np.nan)
+
+        result["methods"][method] = {
+            "solve_time": {"mean": solve_mean, "lo": solve_lo, "hi": solve_hi},
+            "forward_ms": {"mean": fwd_mean, "lo": fwd_lo, "hi": fwd_hi},
+        }
+    return result
+
+
 def create_gap_table():
     """Table 6: Mean makespan and mean gap per method x mode x instance size.
 
@@ -481,6 +540,7 @@ def main():
         ("Probability of Improvement (bootstrap)",        lambda: analyze_probability_of_improvement(score_dict_per_size, TEST_SIZES), "probability_of_improvement"),
         ("Probability of Improvement Hurink (bootstrap)", lambda: analyze_probability_of_improvement(score_dict_per_size, HURINK_DATASETS), "probability_of_improvement_hurink"),
         ("Scaling (bootstrap)",                           lambda: analyze_scaling(score_dict_per_size, baseline_scores_per_size, TEST_SIZES), "scaling"),
+        ("Efficiency (solve time / forward time)",        lambda: analyze_efficiency(EFFICIENCY_SIZES), "efficiency"),
     ]
 
     total = len(steps)

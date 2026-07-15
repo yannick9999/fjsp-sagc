@@ -147,7 +147,7 @@ def plot_iqm_bars(data: dict):
     ax.set_xlim(group_positions[0] - 0.4, group_positions[-1] + n_methods * bar_width + 0.4)
 
     # Y-axis
-    ax.set_ylim(0.7, 1.04)
+    ax.set_ylim(0.9, 1.04)
     ax.set_ylabel("IQM Score (C_best / C_drl)", fontsize=15, labelpad=8)
     ax.tick_params(axis='y', labelsize=13)
 

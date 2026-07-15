@@ -38,6 +38,15 @@ SIZE_COLORS = {
     "200x10":"#8e44ad",
 }
 
+# Colors matched to the thesis pipeline-overview slide
+TABLE_HEADER_BG     = "#DCEAFC"
+TABLE_HEADER_BORDER = "#1F5FD1"
+TABLE_HEADER_TEXT   = "#1B3A5C"
+TABLE_ROW_BORDER    = "#A9C6EE"
+TABLE_ROW_BG_ODD    = "#EFF5FE"
+TABLE_ROW_BG_EVEN   = "#FFFFFF"
+TABLE_BODY_TEXT     = "#1B3A5C"
+
 RANDOM_COLOR = "#95a5a6"
 RANDOM_STYLE = dict(color=RANDOM_COLOR, linestyle="--", linewidth=1.8,
                     marker="s", markersize=5, label="Random (avg. all sizes)")
@@ -144,6 +153,49 @@ def save_table(table):
     print(f"  Saved {path.name}")
 
 
+def save_table_image(table):
+    columns = ["Critical Retention", "Successor Retention",
+               "Frontier Distance", "Slack Correlation"]
+    col_pairs = [("crit_mean", "crit_std"), ("succ_mean", "succ_std"),
+                 ("front_mean", "front_std"), ("slack_mean", "slack_std")]
+
+    rows = list(table.index)
+
+    def fmt(mean, std):
+        if pd.isna(mean):
+            return "–"
+        return f"{mean:.3f} ± {std:.3f}"
+
+    cell_text = [[fmt(table.loc[idx, m], table.loc[idx, s]) for m, s in col_pairs]
+                 for idx in rows]
+
+    fig, ax = plt.subplots(figsize=(1.8 + 1.9 * len(columns), 0.7 + 0.45 * len(rows)))
+    ax.axis("off")
+
+    tbl = ax.table(cellText=cell_text, rowLabels=rows, colLabels=columns,
+                   cellLoc="center", rowLoc="center", loc="center")
+    tbl.auto_set_font_size(False)
+    tbl.set_fontsize(10)
+    tbl.scale(1, 1.7)
+
+    for (r, c), cell in tbl.get_celld().items():
+        cell.set_linewidth(1.2)
+        if r == 0 or c == -1:
+            cell.set_facecolor(TABLE_HEADER_BG)
+            cell.set_edgecolor(TABLE_HEADER_BORDER)
+            cell.get_text().set_color(TABLE_HEADER_TEXT)
+            cell.get_text().set_fontweight("bold")
+        else:
+            cell.set_facecolor(TABLE_ROW_BG_ODD if r % 2 == 0 else TABLE_ROW_BG_EVEN)
+            cell.set_edgecolor(TABLE_ROW_BORDER)
+            cell.get_text().set_color(TABLE_BODY_TEXT)
+
+    fig.tight_layout()
+    fig.savefig(OUT_DIR / "table_pooling_scores.png", dpi=200, bbox_inches="tight")
+    plt.close(fig)
+    print("  Saved table_pooling_scores.png")
+
+
 # Episode helpers
 
 def binned_mean(df, method, metric):
@@ -226,6 +278,7 @@ def main():
     table = compute_table(data)
     print(table.to_string())
     save_table(table)
+    save_table_image(table)
 
     print("\nGenerating episode plots ...")
     plot_episode(data, "critical_retention",

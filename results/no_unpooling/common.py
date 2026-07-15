@@ -58,6 +58,10 @@ HURINK_LABELS = {"edata": "Edata", "rdata": "Rdata", "vdata": "Vdata"}
 # to keep analyze.py's SIZE_FOLDER_MAP[size] lookups working unchanged.
 SIZE_FOLDER_MAP.update({d: d for d in HURINK_DATASETS})
 
+# Sizes for the runtime/efficiency plot: sampling-only, so 200x10 is dropped
+# (too slow to sample repeatedly, same reasoning as the 02/04 exclusions).
+EFFICIENCY_SIZES = [s for s in TEST_SIZES if s != "200x10"]
+
 # Baselines (dispatching rules). Add CP-SAT and GA later.
 BASELINES = ["MWR", "SPT", "MOR", "FIFO"]
 # One warm family (gold -> rust -> maroon), ordered by decreasing lightness so
