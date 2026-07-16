@@ -441,11 +441,17 @@ def plot_scaling(data: dict):
 
 
 def plot_efficiency(data: dict):
-    """Plot 7: Runtime efficiency (sampling only). Left panel is wall-clock
-    solve time per instance; right panel is the per-decision GNN forward-pass
-    time that drives it. Both vs. instance size, one line per method,
-    log-scale y since the range spans about two orders of magnitude.
-    200x10 and Hurink are excluded (see EFFICIENCY_SIZES / analyze_efficiency).
+    """Plot 7: Runtime efficiency (sampling only). Panel 1 is wall-clock
+    solve time per instance -- this includes n_decisions x forward-pass time
+    PLUS a fixed per-instance overhead (env setup, I/O, sampling-loop
+    bookkeeping) that dominates at small sizes and dilutes the pooling
+    effect there. Panel 2 isolates the per-decision GNN forward-pass time,
+    i.e. just the compute the pooling/no-pooling difference actually
+    touches, with the fixed overhead stripped out -- so the same effect
+    shows up earlier and larger. Both log-scale y (the range spans about
+    two orders of magnitude). The slowdown factor itself is reported in the
+    surrounding text rather than a third panel. 200x10 and Hurink are
+    excluded (see EFFICIENCY_SIZES / analyze_efficiency).
     """
     sizes = data["sizes"]
     x_pos = np.arange(len(sizes))
@@ -454,8 +460,10 @@ def plot_efficiency(data: dict):
     fig.patch.set_facecolor('white')
 
     panels = [
-        (axes[0], "solve_time", "Solve Time per Instance (s)", "Wall-Clock Solve Time"),
-        (axes[1], "forward_ms", "Forward Pass per Decision (ms)", "Per-Decision Forward-Pass Time"),
+        (axes[0], "solve_time", "Solve Time per Instance (s)",
+         "Solve Time (Forward Pass + Fixed Overhead)"),
+        (axes[1], "forward_ms", "Forward Pass per Decision (ms)",
+         "Forward Pass Time"),
     ]
 
     for ax, field, ylabel, title in panels:

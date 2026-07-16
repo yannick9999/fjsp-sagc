@@ -136,11 +136,15 @@ def compute_table(data):
         s = instance_scores_delta(df, "successor_retention")
         rec["succ_mean"], rec["succ_std"] = (s.mean(), s.std()) if len(s) else (np.nan, np.nan)
 
-        s = instance_scores_delta(df, "mean_frontier_dist_kept_dr",
-                                  normalize_by="mean_frontier_dist_all_dr")
+        # Sign flipped (random - learned) so that, like the other metrics,
+        # positive = SAGC keeps operations closer to the frontier than random.
+        s = -instance_scores_delta(df, "mean_frontier_dist_kept_dr",
+                                   normalize_by="mean_frontier_dist_all_dr")
         rec["front_mean"], rec["front_std"] = (s.mean(), s.std()) if len(s) else (np.nan, np.nan)
 
-        s = instance_scores_learned(df, "slack_correlation")
+        # Sign flipped so that positive = low slack correlates with high gate
+        # score, matching the "higher is better for SAGC" convention above.
+        s = -instance_scores_learned(df, "slack_correlation")
         rec["slack_mean"], rec["slack_std"] = (s.mean(), s.std()) if len(s) else (np.nan, np.nan)
 
         records.append(rec)
@@ -154,8 +158,8 @@ def save_table(table):
 
 
 def save_table_image(table):
-    columns = ["Critical Retention", "Successor Retention",
-               "Frontier Distance", "Slack Correlation"]
+    columns = ["Critical\nRetention", "Successor\nRetention",
+               "Frontier\nDistance", "Slack\nCorrelation"]
     col_pairs = [("crit_mean", "crit_std"), ("succ_mean", "succ_std"),
                  ("front_mean", "front_std"), ("slack_mean", "slack_std")]
 
@@ -169,14 +173,14 @@ def save_table_image(table):
     cell_text = [[fmt(table.loc[idx, m], table.loc[idx, s]) for m, s in col_pairs]
                  for idx in rows]
 
-    fig, ax = plt.subplots(figsize=(1.8 + 1.9 * len(columns), 0.7 + 0.45 * len(rows)))
+    fig, ax = plt.subplots(figsize=(1.4 + 1.3 * len(columns), 0.7 + 0.45 * len(rows)))
     ax.axis("off")
 
     tbl = ax.table(cellText=cell_text, rowLabels=rows, colLabels=columns,
                    cellLoc="center", rowLoc="center", loc="center")
     tbl.auto_set_font_size(False)
     tbl.set_fontsize(10)
-    tbl.scale(1, 1.7)
+    tbl.scale(0.82, 1.7)
 
     for (r, c), cell in tbl.get_celld().items():
         cell.set_linewidth(1.2)
@@ -185,6 +189,8 @@ def save_table_image(table):
             cell.set_edgecolor(TABLE_HEADER_BORDER)
             cell.get_text().set_color(TABLE_HEADER_TEXT)
             cell.get_text().set_fontweight("bold")
+            if r == 0:
+                cell.set_height(cell.get_height() * 1.8)
         else:
             cell.set_facecolor(TABLE_ROW_BG_ODD if r % 2 == 0 else TABLE_ROW_BG_EVEN)
             cell.set_edgecolor(TABLE_ROW_BORDER)
@@ -212,6 +218,45 @@ def averaged_random(data, metric):
     """Average random curve across all sizes."""
     curves = [binned_mean(df, "random", metric) for df in data.values()]
     return pd.concat(curves, axis=1).mean(axis=1)
+
+
+def binned_mean_all_methods(df, metric):
+    """Binned mean of `metric` over both methods combined, progress computed
+    per (instance, method). Used as the normalizer reference for scores."""
+    sub = df.copy()
+    sub["progress"] = sub.groupby(["instance", "method"])["step"].transform(
+        lambda s: s / max(s.max(), 1)
+    )
+    sub["bin"] = pd.cut(sub["progress"], bins=EPISODE_BINS,
+                        labels=False, include_lowest=True)
+    return sub.groupby("bin")[metric].mean()
+
+
+def binned_score_delta(df, metric):
+    """Per size, per bin: learned - random. Same sign convention as the table
+    (positive = SAGC beats random)."""
+    learned = binned_mean(df, "learned", metric)
+    random  = binned_mean(df, "random", metric)
+    idx = learned.index.union(random.index)
+    return learned.reindex(idx) - random.reindex(idx)
+
+
+def binned_score_frontier(df):
+    """Per size, per bin: (random - learned) / all_dr, i.e. sign-flipped and
+    normalized like the frontier distance column in the score table."""
+    learned = binned_mean(df, "learned", "mean_frontier_dist_kept_dr")
+    random  = binned_mean(df, "random", "mean_frontier_dist_kept_dr")
+    norm    = binned_mean_all_methods(df, "mean_frontier_dist_all_dr")
+    idx = learned.index.union(random.index).union(norm.index)
+    learned, random, norm = (learned.reindex(idx), random.reindex(idx),
+                             norm.reindex(idx))
+    return (random - learned) / norm
+
+
+def binned_score_slack(df):
+    """Per size, per bin: -learned slack correlation, sign-flipped like the
+    slack correlation column in the score table."""
+    return -binned_mean(df, "learned", "slack_correlation")
 
 
 # Episode plots
@@ -263,6 +308,26 @@ def plot_episode_frontier(data):
     print("  Saved episode_frontier_dist.png")
 
 
+def plot_episode_score(data, score_fn, ylabel, title, fname):
+    fig, ax = plt.subplots(figsize=(8, 5))
+
+    for size, df in data.items():
+        score = score_fn(df)
+        ax.plot(score.index * 10 + 5, score.values,
+                color=SIZE_COLORS[size], linewidth=2,
+                marker="o", markersize=4, label=size)
+
+    ax.axhline(0.0, color="black", linestyle=":", linewidth=1, zorder=0)
+    ax.set_xlabel("Episode progress (%)")
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    ax.legend(fontsize=7, ncol=2)
+    fig.tight_layout()
+    fig.savefig(OUT_DIR / fname, dpi=150)
+    plt.close(fig)
+    print(f"  Saved {fname}")
+
+
 # Main
 
 def main():
@@ -291,6 +356,28 @@ def main():
                  "Slack correlation (Spearman)", "Slack correlation over episode",
                  "episode_slack_correlation.png", hline=0.0)
     plot_episode_frontier(data)
+
+    print("\nGenerating score plots ...")
+    plot_episode_score(
+        data, lambda df: binned_score_delta(df, "critical_retention"),
+        "Critical retention score (learned - random)",
+        "Critical retention score over episode",
+        "episode_critical_retention_score.png")
+    plot_episode_score(
+        data, lambda df: binned_score_delta(df, "successor_retention"),
+        "Successor retention score (learned - random)",
+        "Successor retention score over episode",
+        "episode_successor_retention_score.png")
+    plot_episode_score(
+        data, binned_score_frontier,
+        "Frontier distance score (random - learned, normalized)",
+        "Frontier distance score over episode",
+        "episode_frontier_dist_score.png")
+    plot_episode_score(
+        data, binned_score_slack,
+        "Slack correlation score (-Spearman)",
+        "Slack correlation score over episode",
+        "episode_slack_correlation_score.png")
 
     print("\nDone.")
 
