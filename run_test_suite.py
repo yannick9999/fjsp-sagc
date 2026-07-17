@@ -6,7 +6,7 @@ command-line arguments. config.json is NEVER modified, so multiple seeds can
 run in parallel safely (no race condition on the shared config file).
 
 Results for one combination are written directly into:
-    ./save/<experiment.name>/test/seed<seed>/<data_path>_<greedy|sample>/
+    ./save/<experiment.name>/test/seed<seed>/<data_path>_<greedy|sample>_<indist|ood>/
 
 Already-finished combinations (target folder already contains an .xlsx) are
 skipped, so the script can be safely re-run/resumed (e.g. after a crash on a
@@ -29,6 +29,10 @@ def load_config():
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed", type=int, required=True)
+    parser.add_argument("--model", type=str, required=True,
+                        choices=["indist", "ood"],
+                        help="Which best checkpoint to test: 'indist' (save_best_indist_*.pt) "
+                             "or 'ood' (save_best_ood_*.pt)")
     parser.add_argument("--diagnose", action="store_true",
                         help="Enable pooling diagnostics")
     args = parser.parse_args()
@@ -39,11 +43,17 @@ def main():
     os.makedirs(save_dir, exist_ok=True)
 
     # Test sets to run (folder names under ./data_test/)
-    # DATA_PATHS = ["1005", "1510", "2005", "2010", "3010", "4010", "5010", "10010", "20010"]
-    DATA_PATHS = ["vdata"]
+    DATA_PATHS = [
+        # Synthetic instances (same structure as training)
+        "1005", "1510", "2005", "2010",
+        "3010", "4010", "5010", "10010", "20010",
+        # More machines than training
+        "2020", "2030",
+        # Hurink instances (structurally different)
+        "edata", "rdata", "vdata",
+    ]
     # (sample, suffix): greedy is DRL-G, sample is DRL-S
-    MODES = [(True, "sample")]
-    # MODES = [(False, "greedy"), (True, "sample")]  # uncomment to also run sampling
+    MODES = [(False, "greedy"), (True, "sample")]
     # Number of instances to use per data_path (defaults to 100 if not listed)
     NUM_INS = {
         "Mk": 10,
@@ -55,7 +65,7 @@ def main():
 
     for data_path in DATA_PATHS:
         for sample, suffix in MODES:
-            target_name = "{0}_{1}".format(data_path, suffix)
+            target_name = "{0}_{1}_{2}".format(data_path, suffix, args.model)
             target_path = os.path.join(save_dir, target_name)
             # Skip only if this combination already produced a result file
             if os.path.isdir(target_path) and any(
@@ -64,14 +74,15 @@ def main():
                 continue
 
             num_ins = NUM_INS.get(data_path, DEFAULT_NUM_INS)
-            print("\n=== Running test: data_path={0}, sample={1} -> {2} ===".format(
-                data_path, sample, target_name))
+            print("\n=== Running test: data_path={0}, sample={1}, model={2} -> {3} ===".format(
+                data_path, sample, args.model, target_name))
             cmd = [sys.executable, "test.py",
                    "--seed", str(args.seed),
                    "--data_path", data_path,
                    "--sample", str(sample),
                    "--num_ins", str(num_ins),
-                   "--output_dir", target_path]
+                   "--output_dir", target_path,
+                   "--model_select", args.model]
             if args.diagnose:
                 cmd.append("--diagnose")
             result = subprocess.run(cmd)

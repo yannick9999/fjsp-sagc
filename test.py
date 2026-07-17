@@ -46,6 +46,10 @@ def main():
                         help="Directory to write test results into")
     parser.add_argument("--diagnose", action="store_true",
                         help="Enable pooling diagnostics (collects per-step metrics)")
+    parser.add_argument("--model_select", type=str, default="all",
+                        choices=["all", "indist", "ood"],
+                        help="Which best-checkpoint(s) to test: 'indist' (save_best_indist_*.pt), "
+                             "'ood' (save_best_ood_*.pt), or 'all' (every .pt in model_dir)")
     args = parser.parse_args()
 
     # PyTorch initialization
@@ -96,11 +100,23 @@ def main():
     # Model directory derived from experiment name + seed (single source of truth)
     model_dir = './save/{0}/seed{1}'.format(exp_name, seed)
 
+    # Effective training sizes for the model being tested: prefer the config
+    # snapshot taken at training time (config_used.json) over the live
+    # config.json, since the latter may have since changed for other runs.
+    config_used_path = os.path.join(model_dir, "config_used.json")
+    if os.path.isfile(config_used_path):
+        with open(config_used_path, 'r') as f:
+            train_sizes = json.load(f)["train_paras"]["train_sizes"]
+    else:
+        train_sizes = train_paras.get("train_sizes", [])
+
     data_path = "./data_test/{0}/".format(test_paras["data_path"])
     test_files = os.listdir(data_path)
     test_files.sort(key=lambda x: x[:-4])
     test_files = test_files[:num_ins]
     mod_files = [f for f in os.listdir(model_dir) if f.endswith('.pt')]
+    if args.model_select != "all":
+        mod_files = [f for f in mod_files if f.startswith('save_best_{0}_'.format(args.model_select))]
 
     memories = PPO_model.Memory()
     model = PPO_model.PPO(model_paras, train_paras)
@@ -116,10 +132,7 @@ def main():
 
     # Detect and add models to "rules"
     if "DRL" in rules:
-        for root, ds, fs in os.walk(model_dir):
-            for f in fs:
-                if f.endswith('.pt'):
-                    rules.append(f)
+        rules.extend(mod_files)
     if len(rules) != 1:
         if "DRL" in rules:
             rules.remove("DRL")
@@ -182,8 +195,6 @@ def main():
         step_time_last = time.time()
         makespans = []
         times = []
-        if device.type == 'cuda':
-            torch.cuda.reset_peak_memory_stats(device)
         for i_ins in range(num_ins):
             test_file = data_path + test_files[i_ins]
             with open(test_file) as file_object:
@@ -202,6 +213,7 @@ def main():
                     meminfo = pynvml.nvmlDeviceGetMemoryInfo(handle)
                     if meminfo.used / meminfo.total > 0.7:
                         envs.clear()
+                        torch.cuda.empty_cache()
                 # DRL-S, each env contains multiple (=num_sample) copies of one instance
                 if test_paras["sample"]:
                     env = FJSPEnv(case=[test_file] * test_paras["num_sample"],
@@ -302,8 +314,7 @@ def main():
         ("method",          str(pooling_cfg.get("method", ""))),
         ("num_pool_layers", str(pooling_cfg.get("num_layers", ""))),
         ("pool_ratio",      str(pooling_cfg.get("ratio", ""))),
-        ("num_jobs",        str(env_paras["num_jobs"])),
-        ("num_mas",         str(env_paras["num_mas"])),
+        ("train_sizes",     str([(s["num_jobs"], s["num_mas"], s["weight"]) for s in train_sizes])),
         ("data_path",       str(test_paras["data_path"])),
         ("num_ins",         str(test_paras["num_ins"])),
         ("sample",          str(test_paras["sample"])),

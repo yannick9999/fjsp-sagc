@@ -14,7 +14,7 @@ import numpy as np
 import PPO_model
 from env.case_generator import CaseGenerator
 from env.fjsp_env import FJSPEnv
-from validate import validate, get_validate_env
+from validate import validate, get_validate_envs
 
 
 def setup_seed(seed):
@@ -23,6 +23,35 @@ def setup_seed(seed):
     np.random.seed(seed)
     random.seed(seed)
     torch.backends.cudnn.deterministic = True
+
+def save_training_excel(excel_path, valid_iterations, env_steps_at_valid,
+                        valid_indist_norm, valid_ood_norm, metadata_rows):
+    """Write training results to Excel. Uses atomic write to prevent corruption."""
+    import tempfile
+
+    df_curve = pd.DataFrame({
+        'iteration': valid_iterations,
+        'env_steps': env_steps_at_valid,
+        'indist_norm': valid_indist_norm,
+        'ood_norm': valid_ood_norm,
+    })
+
+    df_meta = pd.DataFrame(metadata_rows, columns=["key", "value"])
+
+    # Write to a temp file first, then atomically replace
+    dir_name = os.path.dirname(excel_path)
+    with tempfile.NamedTemporaryFile(dir=dir_name, suffix='.xlsx', delete=False) as tmp:
+        tmp_path = tmp.name
+    try:
+        with pd.ExcelWriter(tmp_path, engine="openpyxl") as writer:
+            df_curve.to_excel(writer, sheet_name='validation_curve', index=False)
+            df_meta.to_excel(writer, sheet_name='run_metadata', index=False)
+        os.replace(tmp_path, excel_path)
+    except Exception:
+        # Clean up temp file on failure
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
 
 def main():
     parser = argparse.ArgumentParser()
@@ -51,6 +80,9 @@ def main():
     env_paras = load_dict["env_paras"]
     model_paras = load_dict["model_paras"]
     train_paras = load_dict["train_paras"]
+    train_sizes = train_paras["train_sizes"]
+    size_configs = [(s["num_jobs"], s["num_mas"]) for s in train_sizes]
+    size_weights = [s["weight"] for s in train_sizes]
     if args.seed is not None:
         train_paras["seed"] = args.seed
     seed = train_paras["seed"]
@@ -59,21 +91,17 @@ def main():
     env_paras["device"] = device
     model_paras["device"] = device
     env_valid_paras = copy.deepcopy(env_paras)
-    env_valid_paras["batch_size"] = env_paras["valid_batch_size"]
     model_paras["actor_in_dim"] = model_paras["out_size_ma"] * 2 + model_paras["out_size_ope"] * 2
     model_paras["critic_in_dim"] = model_paras["out_size_ma"] + model_paras["out_size_ope"]
 
-    num_jobs = env_paras["num_jobs"]
-    num_mas = env_paras["num_mas"]
-    opes_per_job_min = int(num_mas * 0.8)
-    opes_per_job_max = int(num_mas * 1.2)
-
     memories = PPO_model.Memory()
     model = PPO_model.PPO(model_paras, train_paras, num_envs=env_paras["batch_size"])
-    env_valid = get_validate_env(env_valid_paras)  # Create an environment for validation
-    maxlen = 1  # Save the best model
-    best_models = deque()
-    makespan_best = float('inf')
+    valid_envs = get_validate_envs(env_valid_paras)  # Create environments for validation
+    maxlen = 1  # Save the best model per category
+    best_models_indist = deque()
+    best_models_ood = deque()
+    makespan_best_indist = float('inf')
+    makespan_best_ood = float('inf')
 
     # Output paths
     str_time = time.strftime("%Y%m%d_%H%M%S", time.localtime(time.time()))
@@ -81,11 +109,29 @@ def main():
     os.makedirs(save_path, exist_ok=True)
     # Snapshot the exact config used for this run (audit trail against later edits)
     shutil.copy("./config.json", os.path.join(save_path, "config_used.json"))
+    excel_path = '{0}/train_results_{1}.xlsx'.format(save_path, str_time)
+
+    def build_metadata(peak_gpu_gb='N/A', total_runtime_sec='in_progress'):
+        pooling_cfg = model_paras.get("pooling", {})
+        return [
+            ("experiment",      exp_name),
+            ("timestamp",       str_time),
+            ("seed",            str(seed)),
+            ("method",          str(pooling_cfg.get("method", ""))),
+            ("num_pool_layers", str(pooling_cfg.get("num_layers", ""))),
+            ("pool_ratio",      str(pooling_cfg.get("ratio", ""))),
+            ("train_sizes",     str([(s["num_jobs"], s["num_mas"], s["weight"]) for s in train_sizes])),
+            ("batch_size",      str(env_paras["batch_size"])),
+            ("max_iterations",  str(train_paras["max_iterations"])),
+            ("device",          device.type),
+            ("peak_gpu_gb",     str(peak_gpu_gb)),
+            ("total_runtime_sec", str(total_runtime_sec)),
+        ]
 
     # Accumulators for validation results
     valid_iterations = []
-    valid_results = []
-    valid_results_100 = []
+    valid_indist_norm = []
+    valid_ood_norm = []
     total_env_steps = 0
     env_steps_at_valid = []
 
@@ -95,6 +141,12 @@ def main():
     for i in range(1, train_paras["max_iterations"]+1):
         # Replace training instances every x iteration (x = 20 in paper)
         if (i - 1) % train_paras["parallel_iter"] == 0:
+            # Sample an instance size for this block
+            (num_jobs, num_mas) = random.choices(size_configs, weights=size_weights, k=1)[0]
+            env_paras["num_jobs"] = num_jobs
+            env_paras["num_mas"] = num_mas
+            opes_per_job_min = int(num_mas * 0.8)
+            opes_per_job_max = int(num_mas * 1.2)
             # \mathcal{B} instances use consistent operations to speed up training
             nums_ope = [random.randint(opes_per_job_min, opes_per_job_max) for _ in range(num_jobs)]
             case = CaseGenerator(num_jobs, num_mas, opes_per_job_min, opes_per_job_max, nums_ope=nums_ope)
@@ -145,20 +197,20 @@ def main():
                   f'Total: ~{time.strftime("%H:%M:%S", time.gmtime(total))}]')
             print('Start validating')
             # Record the average results and the results on each instance
-            vali_result, vali_result_100 = validate(env_valid_paras, env_valid, model.policy_old)
+            indist_score, ood_score = validate(valid_envs, model.policy_old)
             valid_iterations.append(i)
-            valid_results.append(vali_result.item())
-            valid_results_100.append(vali_result_100)
+            valid_indist_norm.append(indist_score)
+            valid_ood_norm.append(ood_score)
             env_steps_at_valid.append(total_env_steps)
 
-            # Save the best model
-            if vali_result < makespan_best:
-                makespan_best = vali_result
-                if len(best_models) == maxlen:
-                    delete_file = best_models.popleft()
+            # Save the best model per validation category (indist / ood)
+            if indist_score < makespan_best_indist:
+                makespan_best_indist = indist_score
+                if len(best_models_indist) == maxlen:
+                    delete_file = best_models_indist.popleft()
                     os.remove(delete_file)
-                save_file = '{0}/save_best_{1}_{2}_{3}.pt'.format(save_path, num_jobs, num_mas, i)
-                best_models.append(save_file)
+                save_file = '{0}/save_best_indist_{1}.pt'.format(save_path, i)
+                best_models_indist.append(save_file)
                 checkpoint = {
                     "state_dict": model.policy.state_dict(),
                     "model_paras": {k: v for k, v in model_paras.items() if k != "device"},
@@ -166,55 +218,43 @@ def main():
                 }
                 torch.save(checkpoint, save_file)
 
-    total_runtime_sec = time.time() - start_time
+            if ood_score < makespan_best_ood:
+                makespan_best_ood = ood_score
+                if len(best_models_ood) == maxlen:
+                    delete_file = best_models_ood.popleft()
+                    os.remove(delete_file)
+                save_file = '{0}/save_best_ood_{1}.pt'.format(save_path, i)
+                best_models_ood.append(save_file)
+                checkpoint = {
+                    "state_dict": model.policy.state_dict(),
+                    "model_paras": {k: v for k, v in model_paras.items() if k != "device"},
+                    "env_paras": {k: v for k, v in env_paras.items() if k != "device"},
+                }
+                torch.save(checkpoint, save_file)
 
-    # Peak GPU memory over the full training run
+            # Save Excel after every validation (crash-safe)
+            elapsed_so_far = time.time() - start_time
+            if device.type == 'cuda':
+                peak_bytes = torch.cuda.max_memory_allocated(device)
+                current_peak_gpu = '{:.4f}'.format(peak_bytes / (1024 ** 3))
+            else:
+                current_peak_gpu = 'N/A'
+            metadata_rows = build_metadata(peak_gpu_gb=current_peak_gpu,
+                                            total_runtime_sec=round(elapsed_so_far, 2))
+            save_training_excel(excel_path, valid_iterations, env_steps_at_valid,
+                                valid_indist_norm, valid_ood_norm, metadata_rows)
+
+    # Final save after training completes
+    total_runtime_sec = time.time() - start_time
     if device.type == 'cuda':
         peak_bytes = torch.cuda.max_memory_allocated(device)
         peak_gpu_gb = '{:.4f}'.format(peak_bytes / (1024 ** 3))
     else:
         peak_gpu_gb = 'N/A'
-
-    # Build DataFrames for the three sheets
-    df_curve = pd.DataFrame({
-        'iteration': valid_iterations,
-        'env_steps': env_steps_at_valid,
-        'makespan_avg': valid_results,
-    })
-
-    per_inst_array = torch.stack(valid_results_100, dim=0).to('cpu').numpy()
-    num_val_instances = per_inst_array.shape[1]
-    df_per_inst = pd.DataFrame(
-        per_inst_array,
-        columns=[f'inst_{j}' for j in range(num_val_instances)],
-    )
-    df_per_inst.insert(0, 'iteration', valid_iterations)
-
-    pooling_cfg = model_paras.get("pooling", {})
-    metadata = [
-        ("experiment",      exp_name),
-        ("timestamp",       str_time),
-        ("seed",            str(seed)),
-        ("method",          str(pooling_cfg.get("method", ""))),
-        ("num_pool_layers", str(pooling_cfg.get("num_layers", ""))),
-        ("pool_ratio",      str(pooling_cfg.get("ratio", ""))),
-        ("num_jobs",        str(env_paras["num_jobs"])),
-        ("num_mas",         str(env_paras["num_mas"])),
-        ("batch_size",      str(env_paras["batch_size"])),
-        ("max_iterations",  str(train_paras["max_iterations"])),
-        ("device",          device.type),
-        ("peak_gpu_gb",     peak_gpu_gb),
-        ("total_runtime_sec", str(round(total_runtime_sec, 2))),
-    ]
-    df_meta = pd.DataFrame(metadata, columns=["key", "value"])
-
-    # Write all sheets into a single Excel file
-    out_path = '{0}/train_results_{1}.xlsx'.format(save_path, str_time)
-    with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
-        df_curve.to_excel(writer, sheet_name='validation_curve', index=False)
-        df_per_inst.to_excel(writer, sheet_name='validation_per_instance', index=False)
-        df_meta.to_excel(writer, sheet_name='run_metadata', index=False)
-
+    metadata_rows = build_metadata(peak_gpu_gb=peak_gpu_gb,
+                                    total_runtime_sec=round(total_runtime_sec, 2))
+    save_training_excel(excel_path, valid_iterations, env_steps_at_valid,
+                        valid_indist_norm, valid_ood_norm, metadata_rows)
     print("total_time: ", total_runtime_sec)
 
 if __name__ == '__main__':
