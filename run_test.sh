@@ -39,5 +39,5 @@ fi
 echo "=== Testing seed=${SEED} exp=${EXP_NAME} model_dir=${MODEL_DIR} ==="
 srun nvidia-smi || true
 
-# exec srun "${PYTHON}" run_test_suite.py --seed "${SEED}" --diagnose
-exec srun "${PYTHON}" run_test_suite.py --seed "${SEED}"
+# exec srun "${PYTHON}" run_test_suite.py --seed "${SEED}" --diagnose --model indist / ood
+exec srun "${PYTHON}" run_test_suite.py --seed "${SEED}" --model indist
