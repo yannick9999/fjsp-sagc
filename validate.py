@@ -92,7 +92,7 @@ def validate(valid_envs, model_policy):
             if not gantt_result:
                 print("Scheduling Error！！！！！！")
 
-            makespan_batch = env.makespan_batch.to('cpu')
+            makespan_batch = env.makespan_batch
             mwr_tensor = torch.tensor([mwr_dict[filename] for filename in filenames])
             normalized = makespan_batch / mwr_tensor
             size_mean = normalized.mean().item()
