@@ -18,7 +18,7 @@ from rliable import plot_utils
 from common import (
     ANALYSIS_CACHE,
     BASELINE_COLORS,
-    BASELINES,
+    BASELINE_LABELS,
     HURINK_DATASETS,
     HURINK_LABELS,
     METHOD_COLORS,
@@ -106,9 +106,10 @@ def plot_training_curves(data: dict):
 
 
 def plot_iqm_bars(data: dict, sizes: list[str], out_name: str, title: str, figsize: tuple[float, float],
-                  exclude: set[tuple[str, str, str]] | None = None, show_baselines: bool = False):
+                  exclude: set[tuple[str, str, str]] | None = None,
+                  baseline_keys: list[str] | None = None):
     """IQM as a grouped bar chart. One bar per (method, mode), optionally plus
-    one bar per dispatching-rule baseline.
+    one bar per entry in `baseline_keys` (e.g. CP-SAT, best dispatching rule).
 
     Ordered sample-then-greedy, method innermost (e.g. SAGC_s, NoPooling_s,
     SAGC_g, NoPooling_g) so that within each mode the methods sit side by
@@ -122,7 +123,7 @@ def plot_iqm_bars(data: dict, sizes: list[str], out_name: str, title: str, figsi
     exclude = exclude or set()
     mode_order = ["sample", "greedy"]
     combos = [(method, mode) for mode in mode_order for method in METHODS]
-    baselines = BASELINES if show_baselines else []
+    baselines = baseline_keys or []
 
     n_sizes = len(sizes)
     n_items = len(combos) + len(baselines)
@@ -155,6 +156,7 @@ def plot_iqm_bars(data: dict, sizes: list[str], out_name: str, title: str, figsi
                 err_low.append(val - entry["cis"][key][0])
                 err_high.append(entry["cis"][key][1] - val)
                 max_top = max(max_top, entry["cis"][key][1])
+                min_bottom = min(min_bottom, entry["cis"][key][0])
             else:
                 means.append(0)
                 err_low.append(0)
@@ -167,7 +169,9 @@ def plot_iqm_bars(data: dict, sizes: list[str], out_name: str, title: str, figsi
                       edgecolor="white", linewidth=0.6, zorder=3)
         combo_bar_handles.append(bars[0])
 
-    # Baseline bars (dispatching rules) -- deterministic, so no CI/error bar.
+    # Baseline bars (e.g. CP-SAT, best dispatching rule) -- deterministic,
+    # so no CI/error bar. Missing values are NaN so matplotlib simply skips
+    # drawing that bar, instead of a misleading zero-height stub.
     baseline_bar_handles = []
     for b_idx, baseline in enumerate(baselines):
         offsets = group_positions + (len(combos) + b_idx) * bar_width
@@ -175,7 +179,7 @@ def plot_iqm_bars(data: dict, sizes: list[str], out_name: str, title: str, figsi
         for size in sizes:
             entry = data.get(size)
             val = entry["baseline_iqm"].get(baseline) if entry else None
-            means.append(val if val is not None else 0)
+            means.append(val if val is not None else np.nan)
             if val is not None:
                 max_top = max(max_top, val)
                 min_bottom = min(min_bottom, val)
@@ -206,7 +210,8 @@ def plot_iqm_bars(data: dict, sizes: list[str], out_name: str, title: str, figsi
 
     # Legend top right inside plot
     all_handles = combo_bar_handles + baseline_bar_handles
-    all_labels = [f"{METHOD_LABELS[m]} ({MODE_LABELS[mo]})" for m, mo in combos] + list(baselines)
+    all_labels = [f"{METHOD_LABELS[m]} ({MODE_LABELS[mo]})" for m, mo in combos] + \
+        [BASELINE_LABELS.get(b, b) for b in baselines]
     ax.legend(all_handles, all_labels,
               loc="upper right", fontsize=11,
               frameon=True, framealpha=0.9,
@@ -518,11 +523,12 @@ def main():
         ("02 IQM Bars",
          lambda: plot_iqm_bars(data["iqm_bars"], TEST_SIZES, "02_iqm_bars.png",
                                "Interquartile Mean with 95% Bootstrap CIs", (16, 7),
-                               exclude={("200x10", "sagc", "sample"), ("200x10", "nopooling", "sample")})),
+                               exclude={("200x10", "sagc", "sample"), ("200x10", "nopooling", "sample")},
+                               baseline_keys=["CPSAT", "BestDR"])),
         ("02b IQM Bars (Hurink)",
          lambda: plot_iqm_bars(data["iqm_bars_hurink"], HURINK_DATASETS, "02b_iqm_bars_hurink.png",
                                "Interquartile Mean with 95% Bootstrap CIs (Hurink)", (11, 7),
-                               show_baselines=True)),
+                               baseline_keys=["CPSAT", "BestDR"])),
         ("03 Performance Profiles",
          lambda: plot_performance_profiles(data["performance_profiles"], TEST_SIZES, {}, 3,
                                            "03_performance_profiles.png",

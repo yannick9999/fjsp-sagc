@@ -22,6 +22,7 @@ from common import (
     BASELINES,
     BENCHMARKS_DIR,
     BOOTSTRAP_REPS,
+    DISPATCHING_RULES,
     EFFICIENCY_SIZES,
     HURINK_DATASETS,
     MK_SIZE,
@@ -145,6 +146,12 @@ def compute_c_best(baseline_data: dict[str, dict[str, float]]) -> dict[str, floa
         if values:
             c_best[inst] = min(values)
     return c_best
+
+
+def compute_c_best_dr(baseline_data: dict[str, dict[str, float]]) -> dict[str, float]:
+    """Computes the best-dispatching-rule makespan per instance (CP-SAT excluded)."""
+    dr_data = {b: d for b, d in baseline_data.items() if b in DISPATCHING_RULES}
+    return compute_c_best(dr_data)
 
 
 def build_score_matrix(method: str, size: str, c_best: dict[str, float],
@@ -405,72 +412,68 @@ def analyze_efficiency(sizes: list[str]) -> dict:
 
 
 def create_gap_table():
-    """Table 6: Mean makespan and mean gap per method x mode x instance size.
+    """Table 6: Makespan and gap-to-CP-SAT per method x mode x instance size.
 
-    Also includes Mk (Brandimarte) and the Hurink datasets at the end.
-    Writes the CSV directly; this is a table, not a plot, so it doesn't go
-    through plot.py.
+    Rows are instance sizes plus Mk (Brandimarte) and the Hurink datasets.
+    Columns are CP-SAT, the four dispatching rules, and each (method, mode)
+    combo, each with a Makespan and a Gap % (relative to CP-SAT) sub-column.
+    Sizes/datasets without CP-SAT data (e.g. 200x10, Mk, Hurink) get NaN
+    gaps. Saved as .xlsx, not a plot, so it doesn't go through plot.py.
     """
     all_sizes = TEST_SIZES + [MK_SIZE] + HURINK_DATASETS
-    rows = []
+    combo_labels = [f"{METHOD_LABELS[m]} ({MODE_LABELS[mo]})" for m in METHODS for mo in MODES]
+    col_methods = ["CPSAT"] + DISPATCHING_RULES + combo_labels
+    columns = pd.MultiIndex.from_product([col_methods, ["Makespan", "Gap %"]])
+    table = pd.DataFrame(index=pd.Index(all_sizes, name="size"), columns=columns, dtype=float)
 
     for size in all_sizes:
         baseline_data = get_baseline_makespans(size)
-        c_best = compute_c_best(baseline_data)
+        cpsat_data = baseline_data.get("CPSAT")
 
-        # DRL methods
+        # CP-SAT itself: gap to itself is always 0 (when present)
+        if cpsat_data:
+            table.loc[size, ("CPSAT", "Makespan")] = np.mean(list(cpsat_data.values()))
+            table.loc[size, ("CPSAT", "Gap %")] = 0.0
+
+        # Dispatching rules
+        for rule in DISPATCHING_RULES:
+            b_data = baseline_data.get(rule)
+            if b_data is None:
+                continue
+            table.loc[size, (rule, "Makespan")] = np.mean(list(b_data.values()))
+            if cpsat_data:
+                common = sorted(set(b_data.keys()) & set(cpsat_data.keys()))
+                if common:
+                    gaps = [(b_data[i] / cpsat_data[i] - 1) * 100 for i in common]
+                    table.loc[size, (rule, "Gap %")] = np.mean(gaps)
+
+        # DRL methods x modes, averaged over seeds
         for method in METHODS:
             for mode in MODES:
-                per_seed_gaps = []
-                per_seed_makespans = []
+                label = f"{METHOD_LABELS[method]} ({MODE_LABELS[mode]})"
+                per_seed_makespans, per_seed_gaps = [], []
                 for s in SEEDS:
                     d = load_drl_test_makespans(method, size, s, mode)
                     if d is None:
                         continue
-                    instances = sorted(set(d.keys()) & set(c_best.keys()))
-                    if not instances:
-                        continue
-                    makespans = np.array([d[i] for i in instances])
-                    c_bests = np.array([c_best[i] for i in instances])
-                    gaps = (makespans / c_bests - 1) * 100
-                    per_seed_gaps.append(gaps.mean())
-                    per_seed_makespans.append(makespans.mean())
+                    per_seed_makespans.append(np.mean(list(d.values())))
+                    if cpsat_data:
+                        common = sorted(set(d.keys()) & set(cpsat_data.keys()))
+                        if common:
+                            gaps = [(d[i] / cpsat_data[i] - 1) * 100 for i in common]
+                            per_seed_gaps.append(np.mean(gaps))
+                if per_seed_makespans:
+                    table.loc[size, (label, "Makespan")] = np.mean(per_seed_makespans)
                 if per_seed_gaps:
-                    rows.append({
-                        "size": size,
-                        "method": METHOD_LABELS[method],
-                        "mode": MODE_LABELS[mode],
-                        "mean_makespan": f"{np.mean(per_seed_makespans):.1f} +/- {np.std(per_seed_makespans):.1f}",
-                        "mean_gap_pct": f"{np.mean(per_seed_gaps):.2f} +/- {np.std(per_seed_gaps):.2f}",
-                    })
+                    table.loc[size, (label, "Gap %")] = np.mean(per_seed_gaps)
 
-        # Baselines
-        for b in BASELINES:
-            b_data = baseline_data.get(b)
-            if b_data is None:
-                continue
-            instances = sorted(set(b_data.keys()) & set(c_best.keys()))
-            if not instances:
-                continue
-            makespans = np.array([b_data[i] for i in instances])
-            c_bests = np.array([c_best[i] for i in instances])
-            gaps = (makespans / c_bests - 1) * 100
-            rows.append({
-                "size": size,
-                "method": b,
-                "mode": "-",
-                "mean_makespan": f"{makespans.mean():.1f}",
-                "mean_gap_pct": f"{gaps.mean():.2f}",
-            })
+    xlsx_path = PLOTS_DIR / "06_gap_table.xlsx"
+    with pd.ExcelWriter(xlsx_path, engine="openpyxl") as writer:
+        table.to_excel(writer, sheet_name="gap_table")
+    print(f"  Saved 06_gap_table.xlsx ({len(table)} rows)")
 
-    df = pd.DataFrame(rows)
-    csv_path = PLOTS_DIR / "06_gap_table.csv"
-    df.to_csv(csv_path, index=False)
-    print(f"  Saved 06_gap_table.csv ({len(df)} rows)")
-
-    # Also display in terminal
     print()
-    print(df.to_string(index=False))
+    print(table.to_string())
 
 
 # Main
@@ -527,6 +530,12 @@ def main():
                 arr = build_baseline_score(b_data, c_best, instances)
                 if arr.size:
                     baseline_scores[b] = arr
+
+            best_dr = compute_c_best_dr(baseline_data)
+            arr = build_baseline_score(best_dr, c_best, instances)
+            if arr.size:
+                baseline_scores["BestDR"] = arr
+
             baseline_scores_per_size[size] = baseline_scores
 
     cache = {}

@@ -18,6 +18,7 @@ from rliable import plot_utils
 from common import (
     ANALYSIS_CACHE,
     BASELINE_COLORS,
+    BASELINE_LABELS,
     METHOD_COLORS,
     METHOD_LABELS,
     METHODS,
@@ -96,58 +97,90 @@ def plot_training_curves(data: dict):
 
 
 def plot_iqm_bars(data: dict):
-    """Plot 2: IQM as a single grouped bar chart, no baselines."""
-    all_sizes = ["10x5", "15x10", "20x5", "20x10", "50x10", "100x10", "200x10"]
+    """Plot 2: IQM as a single grouped bar chart -- CP-SAT, best dispatching
+    rule, and the DRL methods, per instance size."""
+    all_sizes = TEST_SIZES
+
+    # (key, is_bootstrapped) -- CP-SAT/BestDR are deterministic baselines
+    # (no CI), the DRL methods have bootstrap means/CIs.
+    bar_series = [("CPSAT", False), ("BestDR", False)] + [(m, True) for m in METHODS]
 
     n_sizes = len(all_sizes)
-    n_methods = len(METHODS)
+    n_bars = len(bar_series)
     bar_width = 0.35
     group_gap = 0.7
-    group_positions = np.arange(n_sizes) * (n_methods * bar_width + group_gap)
+    group_positions = np.arange(n_sizes) * (n_bars * bar_width + group_gap)
 
     fig, ax = plt.subplots(figsize=(14, 7))
     fig.patch.set_facecolor('white')
     ax.set_facecolor('#F9F9F9')
 
+    def color_for(key):
+        return METHOD_COLORS.get(key, BASELINE_COLORS.get(key, "gray"))
+
+    def label_for(key):
+        return METHOD_LABELS.get(key, BASELINE_LABELS.get(key, key))
+
     # Draw bars
-    method_bar_handles = []
-    for m_idx, method in enumerate(METHODS):
-        offsets = group_positions + m_idx * bar_width
+    bar_handles = []
+    all_means = []
+    for b_idx, (key, is_method) in enumerate(bar_series):
+        offsets = group_positions + b_idx * bar_width
         means, err_low, err_high = [], [], []
 
         for size in all_sizes:
             entry = data.get(size)
-            if entry:
-                val = entry["means"][method]
+            if not entry:
+                means.append(np.nan)
+                err_low.append(0)
+                err_high.append(0)
+                continue
+            if is_method:
+                if key not in entry["means"]:
+                    means.append(np.nan)
+                    err_low.append(0)
+                    err_high.append(0)
+                    continue
+                val = entry["means"][key]
                 means.append(val)
-                err_low.append(val - entry["cis"][method][0])
-                err_high.append(entry["cis"][method][1] - val)
+                err_low.append(val - entry["cis"][key][0])
+                err_high.append(entry["cis"][key][1] - val)
             else:
-                means.append(0)
+                val = entry["baseline_iqm"].get(key)
+                if val is None:
+                    means.append(np.nan)
+                    err_low.append(0)
+                    err_high.append(0)
+                    continue
+                means.append(val)
                 err_low.append(0)
                 err_high.append(0)
 
         bars = ax.bar(offsets, means, width=bar_width,
-                      color=METHOD_COLORS[method],
+                      color=color_for(key),
                       yerr=[err_low, err_high],
                       capsize=3, error_kw={"elinewidth": 1.0, "capthick": 1.0},
                       edgecolor="none", zorder=3)
-        method_bar_handles.append(bars[0])
+        bar_handles.append(bars[0])
+        all_means.extend(v for v in means if v > 0 and not np.isnan(v))
 
-        # Value labels centered above each bar
+        # Value labels centered above each bar (skip bars with no data)
         for xi, val, eh in zip(offsets, means, err_high):
+            if np.isnan(val):
+                continue
             ax.text(xi, val + eh + 0.006, f"{val:.3f}",
                     ha="center", va="bottom", fontsize=10, fontweight="bold")
-                    
+
 
     # X-axis group labels
-    group_centers = group_positions + (n_methods - 1) * bar_width / 2
+    group_centers = group_positions + (n_bars - 1) * bar_width / 2
     ax.set_xticks(group_centers)
     ax.set_xticklabels(all_sizes, fontsize=13)
-    ax.set_xlim(group_positions[0] - 0.4, group_positions[-1] + n_methods * bar_width + 0.4)
+    ax.set_xlim(group_positions[0] - 0.4, group_positions[-1] + n_bars * bar_width + 0.4)
 
-    # Y-axis
-    ax.set_ylim(0.9, 1.04)
+    # Y-axis -- auto-ranged since BestDR can sit well below the DRL methods
+    y_lo = min(all_means, default=0.9) - 0.05
+    ax.set_ylim(max(0, y_lo), 1.04)
     ax.set_ylabel("IQM Score (C_best / C_drl)", fontsize=15, labelpad=8)
     ax.tick_params(axis='y', labelsize=13)
 
@@ -158,8 +191,8 @@ def plot_iqm_bars(data: dict):
     ax.spines['right'].set_visible(False)
 
     # Legend top right inside plot
-    all_labels = [METHOD_LABELS[m] for m in METHODS]
-    ax.legend(method_bar_handles, all_labels,
+    bar_labels = [label_for(key) for key, _ in bar_series]
+    ax.legend(bar_handles, bar_labels,
               loc="upper right", fontsize=13,
               frameon=True, framealpha=0.9,
               edgecolor="#CCCCCC", handlelength=2.0)

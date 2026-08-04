@@ -1,0 +1,599 @@
+"""Loads multi-size training result data, runs the rliable bootstrap
+analysis, and writes the gap table plus a cache of everything plot.py needs.
+
+indist and ood are two separate experiments here (see common.py docstring):
+this script runs the full pipeline once per split in SPLITS, writing
+analysis_cache_{split}.pkl and plots/{split}/06_gap_table.xlsx. The
+instance-structure (flexibility/job-correlation) ablation is unrelated and
+lives in ablation_analyze.py.
+
+Run this whenever the underlying data changes. Run plot.py (no
+recomputation) whenever only the plot styling should change.
+"""
+
+from __future__ import annotations
+
+import pickle
+import time
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+from rliable import library as rly
+from rliable import metrics
+
+from common import (
+    BASELINES,
+    BENCHMARKS_DIR,
+    BOOTSTRAP_REPS,
+    DISPATCHING_RULES,
+    EFFICIENCY_SIZES,
+    HURINK_DATASETS,
+    METHOD_DIRS,
+    METHOD_LABELS,
+    METHODS,
+    MODE_LABELS,
+    MODES,
+    SCRIPT_DIR,
+    SEEDS,
+    SIZE_FOLDER_MAP,
+    SPLIT_LABELS,
+    SPLITS,
+    TEST_SIZES,
+    cache_path,
+    combo_key,
+    plots_dir,
+    split_combo_key,
+)
+
+
+# Data loading
+
+def _find_excel(folder: Path, pattern: str = "*.xlsx"):
+    """Finds the newest Excel file in the folder."""
+    if not folder.is_dir():
+        return None
+    files = sorted(folder.glob(pattern))
+    return files[-1] if files else None
+
+
+def load_drl_test_makespans(method: str, size: str, seed: int, mode: str, split: str) -> dict[str, float] | None:
+    """Loads test makespans per instance for a method, size, seed, mode, split.
+
+    `split` selects which checkpoint was used at test time ("indist" or
+    "ood"), not a different test-instance set.
+
+    Returns:
+        Dict {instance_name: makespan} or None if the file is missing.
+    """
+    folder_size = SIZE_FOLDER_MAP[size]
+    folder = SCRIPT_DIR / METHOD_DIRS[method] / "test" / f"seed{seed}" / f"{folder_size}_{mode}_{split}"
+    excel = _find_excel(folder, "test_results_*.xlsx")
+    if excel is None:
+        return None
+    df = pd.read_excel(excel, sheet_name="makespan")
+    # Column 0 is file_name, column 1 is the model checkpoint (makespan)
+    instance_col = df.columns[0]
+    makespan_col = df.columns[1]
+    return dict(zip(df[instance_col].astype(str), df[makespan_col].astype(float)))
+
+
+def load_drl_overhead(method: str, size: str, seed: int, mode: str, split: str) -> pd.DataFrame | None:
+    """Loads coarsening_overhead sheet."""
+    folder_size = SIZE_FOLDER_MAP[size]
+    folder = SCRIPT_DIR / METHOD_DIRS[method] / "test" / f"seed{seed}" / f"{folder_size}_{mode}_{split}"
+    excel = _find_excel(folder, "test_results_*.xlsx")
+    if excel is None:
+        return None
+    try:
+        return pd.read_excel(excel, sheet_name="coarsening_overhead")
+    except Exception:
+        return None
+
+
+def load_drl_training_curve(method: str, seed: int) -> pd.DataFrame | None:
+    """Loads validation_curve for a method and seed.
+
+    Contains both 'indist_norm' and 'ood_norm' columns (makespan normalized
+    by the MWR baseline, averaged per size then across sizes) -- the caller
+    picks the column matching the split being analyzed.
+    """
+    folder = SCRIPT_DIR / METHOD_DIRS[method] / f"seed{seed}"
+    excel = _find_excel(folder, "train_results_*.xlsx")
+    if excel is None:
+        return None
+    return pd.read_excel(excel, sheet_name="validation_curve")
+
+
+def load_drl_solve_times(method: str, size: str, seed: int, mode: str, split: str) -> np.ndarray | None:
+    """Loads per-instance solve_time (wall-clock seconds)."""
+    folder_size = SIZE_FOLDER_MAP[size]
+    folder = SCRIPT_DIR / METHOD_DIRS[method] / "test" / f"seed{seed}" / f"{folder_size}_{mode}_{split}"
+    excel = _find_excel(folder, "test_results_*.xlsx")
+    if excel is None:
+        return None
+    df = pd.read_excel(excel, sheet_name="solve_time")
+    return df.iloc[:, 1].astype(float).values
+
+
+def load_benchmark_makespans(rule: str, size: str) -> dict[str, float] | None:
+    """Loads benchmark makespans from CSV.
+
+    Returns:
+        Dict {instance_name: makespan} or None if the file is missing.
+    """
+    csv = BENCHMARKS_DIR / rule / f"{SIZE_FOLDER_MAP[size]}.csv"
+    if not csv.exists():
+        return None
+    df = pd.read_csv(csv)
+    return dict(zip(df["instance_name"].astype(str), df["makespan"].astype(float)))
+
+
+# Score matrices
+
+def get_baseline_makespans(size: str) -> dict[str, dict[str, float]]:
+    """Collects all available baseline makespans for a size.
+
+    Returns:
+        Dict {baseline_name: {instance_name: makespan}}
+    """
+    result = {}
+    for b in BASELINES:
+        m = load_benchmark_makespans(b, size)
+        if m is not None:
+            result[b] = m
+        else:
+            print(f"  [warn] Baseline {b} missing for {size}")
+    return result
+
+
+def compute_c_best(baseline_data: dict[str, dict[str, float]]) -> dict[str, float]:
+    """Computes C_best per instance as the minimum over all baselines."""
+    if not baseline_data:
+        return {}
+    all_instances = set()
+    for b_data in baseline_data.values():
+        all_instances.update(b_data.keys())
+    c_best = {}
+    for inst in all_instances:
+        values = [b_data[inst] for b_data in baseline_data.values() if inst in b_data]
+        if values:
+            c_best[inst] = min(values)
+    return c_best
+
+
+def compute_c_best_dr(baseline_data: dict[str, dict[str, float]]) -> dict[str, float]:
+    """Computes the best-dispatching-rule makespan per instance (CP-SAT excluded)."""
+    dr_data = {b: d for b, d in baseline_data.items() if b in DISPATCHING_RULES}
+    return compute_c_best(dr_data)
+
+
+def build_score_matrix(method: str, size: str, c_best: dict[str, float],
+                       mode: str, split: str) -> tuple[np.ndarray, list[str]]:
+    """Builds the normalized score matrix for a method, size, mode, split.
+
+    Score = C_best / C_drl (higher = better).
+
+    Returns:
+        (matrix shape (num_seeds, num_instances), list of instance_names in
+         the same order as the matrix columns)
+    """
+    per_seed_dicts = []
+    for s in SEEDS:
+        d = load_drl_test_makespans(method, size, s, mode, split)
+        if d is None:
+            print(f"  [warn] Test data missing: {method} seed{s} {size} {mode} {split}")
+            return np.array([]), []
+        per_seed_dicts.append(d)
+
+    common = set(per_seed_dicts[0].keys())
+    for d in per_seed_dicts[1:]:
+        common &= set(d.keys())
+    if c_best:
+        common &= set(c_best.keys())
+    instances = sorted(common)
+
+    if not instances:
+        return np.array([]), []
+
+    matrix = np.zeros((len(SEEDS), len(instances)))
+    for i, s in enumerate(SEEDS):
+        for j, inst in enumerate(instances):
+            matrix[i, j] = c_best[inst] / per_seed_dicts[i][inst]
+    return matrix, instances
+
+
+def build_baseline_score(baseline_makespans: dict[str, float], c_best: dict[str, float],
+                         instances: list[str]) -> np.ndarray:
+    """Score array for a deterministic baseline (shape (1, num_instances))."""
+    scores = np.array([c_best[i] / baseline_makespans[i] for i in instances if i in baseline_makespans])
+    return scores.reshape(1, -1)
+
+
+# Bootstrap analysis (the expensive rliable calls; results get cached for plot.py)
+
+def analyze_training_curves(split: str) -> dict:
+    """Aggregates (mean/min/max) training curves per method across seeds.
+
+    Uses the '{split}_norm' column (makespan normalized by MWR, lower is
+    better) -- a different normalization than the C_best-based score used
+    everywhere else, since this is what was logged during training.
+    """
+    column = f"{split}_norm"
+    result = {}
+    for method in METHODS:
+        curves = []
+        for s in SEEDS:
+            df = load_drl_training_curve(method, s)
+            if df is None:
+                print(f"  [warn] Training data missing: {method} seed{s}")
+                continue
+            curves.append(df)
+        if not curves:
+            continue
+
+        min_len = min(len(c) for c in curves)
+        env_steps = curves[0]["env_steps"].values[:min_len]
+        norms = np.stack([c[column].values[:min_len] for c in curves])
+
+        result[method] = {
+            "env_steps": env_steps,
+            "mean": norms.mean(axis=0),
+            "lo": norms.min(axis=0),
+            "hi": norms.max(axis=0),
+        }
+    return result
+
+
+def analyze_iqm_bars(score_dict_per_size: dict[str, dict[str, np.ndarray]],
+                     baseline_scores_per_size: dict[str, dict[str, np.ndarray]],
+                     sizes: list[str]) -> dict:
+    """Bootstraps IQM + 95% CI per (method, mode), per size; plus baseline IQM points."""
+    iqm_fn = lambda x: np.array([metrics.aggregate_iqm(x)])
+    result = {}
+    n = len(sizes)
+
+    for si, size in enumerate(sizes):
+        score_dict = score_dict_per_size.get(size, {})
+        if not score_dict:
+            result[size] = None
+            continue
+
+        print(f"    bootstrap {size} ({si+1}/{n}) ...", end=" ", flush=True)
+        t0 = time.time()
+        iqm_scores, iqm_cis = rly.get_interval_estimates(score_dict, iqm_fn, reps=BOOTSTRAP_REPS)
+        print(f"{time.time()-t0:.1f}s")
+
+        methods = list(score_dict.keys())
+        means = {m: float(iqm_scores[m][0]) for m in methods}
+        cis = {m: (float(iqm_cis[m][0, 0]), float(iqm_cis[m][1, 0])) for m in methods}
+
+        baseline_scores = baseline_scores_per_size.get(size, {})
+        baseline_iqm = {}
+        for b, arr in baseline_scores.items():
+            if arr.size:
+                baseline_iqm[b] = float(metrics.aggregate_iqm(arr))
+
+        result[size] = {"methods": methods, "means": means, "cis": cis, "baseline_iqm": baseline_iqm}
+
+    return result
+
+
+def analyze_performance_profiles(score_dict_per_size: dict[str, dict[str, np.ndarray]],
+                                 sizes: list[str]) -> dict:
+    """Bootstraps performance profiles (score distribution over tau) per size."""
+    tau_list = np.linspace(0.75, 1.05, 50)
+    result = {"tau_list": tau_list, "sizes": {}}
+    n = len(sizes)
+
+    for si, size in enumerate(sizes):
+        score_dict = score_dict_per_size.get(size, {})
+        if not score_dict:
+            result["sizes"][size] = None
+            continue
+
+        print(f"    bootstrap {size} ({si+1}/{n}) ...", end=" ", flush=True)
+        t0 = time.time()
+        score_distr, score_distr_cis = rly.create_performance_profile(
+            score_dict, tau_list, reps=BOOTSTRAP_REPS
+        )
+        print(f"{time.time()-t0:.1f}s")
+
+        result["sizes"][size] = {"score_distr": score_distr, "score_distr_cis": score_distr_cis}
+
+    return result
+
+
+def analyze_probability_of_improvement(score_dict_per_size: dict[str, dict[str, np.ndarray]],
+                                       sizes: list[str]) -> dict:
+    """Bootstraps P(method1 > method2), one value per instance size, per mode."""
+    if len(METHODS) < 2:
+        return {}
+    m1, m2 = METHODS[0], METHODS[1]
+
+    result = {}
+    for mode in MODES:
+        key = f"{m1}_gt_{m2}"
+        k1, k2 = combo_key(m1, mode), combo_key(m2, mode)
+        means, lows, highs, sizes_with_data = [], [], [], []
+
+        for si, size in enumerate(sizes):
+            sd = score_dict_per_size.get(size, {})
+            if k1 not in sd or k2 not in sd:
+                continue
+            print(f"    bootstrap {size} {mode} ({si+1}/{len(sizes)}) ...", end=" ", flush=True)
+            t0 = time.time()
+            pair_dict = {key: (sd[k1], sd[k2])}
+            poi, poi_cis = rly.get_interval_estimates(
+                pair_dict, metrics.probability_of_improvement, reps=BOOTSTRAP_REPS
+            )
+            print(f"{time.time()-t0:.1f}s")
+            means.append(float(np.squeeze(poi[key])))
+            ci = poi_cis[key]
+            lows.append(float(np.squeeze(ci[0])))
+            highs.append(float(np.squeeze(ci[1])))
+            sizes_with_data.append(size)
+
+        result[mode] = {"m1": m1, "m2": m2, "sizes": sizes_with_data,
+                        "means": means, "lows": lows, "highs": highs}
+
+    return result
+
+
+def analyze_scaling(score_dict_per_size: dict[str, dict[str, np.ndarray]],
+                    baseline_scores_per_size: dict[str, dict[str, np.ndarray]],
+                    sizes: list[str]) -> dict:
+    """Bootstraps IQM vs. instance size, one series per (method, mode); plus baseline points."""
+    iqm_fn = lambda x: np.array([metrics.aggregate_iqm(x)])
+
+    combos = [combo_key(method, mode) for method in METHODS for mode in MODES]
+    methods_result = {}
+    total_bs = len(combos) * len(sizes)
+    bs_i = 0
+    for key in combos:
+        means, lows, highs = [], [], []
+        for size in sizes:
+            sd = score_dict_per_size.get(size, {})
+            bs_i += 1
+            if key not in sd:
+                means.append(np.nan)
+                lows.append(np.nan)
+                highs.append(np.nan)
+                continue
+            print(f"    bootstrap {key} {size} ({bs_i}/{total_bs}) ...", end=" ", flush=True)
+            t0 = time.time()
+            single = {key: sd[key]}
+            iqm_scores, iqm_cis = rly.get_interval_estimates(single, iqm_fn, reps=BOOTSTRAP_REPS)
+            print(f"{time.time()-t0:.1f}s")
+            means.append(float(iqm_scores[key][0]))
+            lows.append(float(iqm_cis[key][0, 0]))
+            highs.append(float(iqm_cis[key][1, 0]))
+        methods_result[key] = {"means": means, "lows": lows, "highs": highs}
+
+    baselines_result = {}
+    for b in BASELINES:
+        means = []
+        for size in sizes:
+            arr = baseline_scores_per_size.get(size, {}).get(b)
+            means.append(np.nan if arr is None or arr.size == 0 else float(metrics.aggregate_iqm(arr)))
+        if not all(np.isnan(means)):
+            baselines_result[b] = means
+
+    return {"methods": methods_result, "baselines": baselines_result}
+
+
+def analyze_efficiency(sizes: list[str], split: str) -> dict:
+    """Solve time and per-decision forward-pass time vs. instance size,
+    sampling mode only (Hurink excluded -- ran on different hardware).
+
+    Mean across seeds, with a min/max band, per method. Coarsening overhead
+    itself (avg_coarse_ms) is negligible for both methods and isn't part of
+    the headline story, so it's left out.
+    """
+    result = {"sizes": sizes, "methods": {}}
+    for method in METHODS:
+        solve_mean, solve_lo, solve_hi = [], [], []
+        fwd_mean, fwd_lo, fwd_hi = [], [], []
+        for size in sizes:
+            solve_per_seed, fwd_per_seed = [], []
+            for s in SEEDS:
+                st = load_drl_solve_times(method, size, s, "sample", split)
+                ov = load_drl_overhead(method, size, s, "sample", split)
+                if st is not None and st.size:
+                    solve_per_seed.append(st.mean())
+                if ov is not None and not ov.empty:
+                    fwd_per_seed.append(ov["avg_forward_ms"].astype(float).mean())
+
+            if solve_per_seed:
+                solve_mean.append(float(np.mean(solve_per_seed)))
+                solve_lo.append(float(np.min(solve_per_seed)))
+                solve_hi.append(float(np.max(solve_per_seed)))
+            else:
+                solve_mean.append(np.nan)
+                solve_lo.append(np.nan)
+                solve_hi.append(np.nan)
+
+            if fwd_per_seed:
+                fwd_mean.append(float(np.mean(fwd_per_seed)))
+                fwd_lo.append(float(np.min(fwd_per_seed)))
+                fwd_hi.append(float(np.max(fwd_per_seed)))
+            else:
+                fwd_mean.append(np.nan)
+                fwd_lo.append(np.nan)
+                fwd_hi.append(np.nan)
+
+        result["methods"][method] = {
+            "solve_time": {"mean": solve_mean, "lo": solve_lo, "hi": solve_hi},
+            "forward_ms": {"mean": fwd_mean, "lo": fwd_lo, "hi": fwd_hi},
+        }
+    return result
+
+
+def create_gap_table(split: str):
+    """Table 6: Makespan and gap-to-CP-SAT per method x mode x instance size,
+    for one split (indist or ood).
+
+    Rows are instance sizes plus the Hurink datasets. Columns are CP-SAT, the
+    four dispatching rules, and each (method, mode) combo, each with a
+    Makespan and a Gap % (relative to CP-SAT) sub-column. Sizes/datasets
+    without CP-SAT data (200x10, Hurink) get NaN gaps. Saved as .xlsx, not a
+    plot, so it doesn't go through plot.py.
+    """
+    all_sizes = TEST_SIZES + HURINK_DATASETS
+    combo_labels = [f"{METHOD_LABELS[m]} ({MODE_LABELS[mo]})" for m in METHODS for mo in MODES]
+    col_methods = ["CPSAT"] + DISPATCHING_RULES + combo_labels
+    columns = pd.MultiIndex.from_product([col_methods, ["Makespan", "Gap %"]])
+    table = pd.DataFrame(index=pd.Index(all_sizes, name="size"), columns=columns, dtype=float)
+
+    for size in all_sizes:
+        baseline_data = get_baseline_makespans(size)
+        cpsat_data = baseline_data.get("CPSAT")
+
+        if cpsat_data:
+            table.loc[size, ("CPSAT", "Makespan")] = np.mean(list(cpsat_data.values()))
+            table.loc[size, ("CPSAT", "Gap %")] = 0.0
+
+        for rule in DISPATCHING_RULES:
+            b_data = baseline_data.get(rule)
+            if b_data is None:
+                continue
+            table.loc[size, (rule, "Makespan")] = np.mean(list(b_data.values()))
+            if cpsat_data:
+                common_inst = sorted(set(b_data.keys()) & set(cpsat_data.keys()))
+                if common_inst:
+                    gaps = [(b_data[i] / cpsat_data[i] - 1) * 100 for i in common_inst]
+                    table.loc[size, (rule, "Gap %")] = np.mean(gaps)
+
+        for method in METHODS:
+            for mode in MODES:
+                label = f"{METHOD_LABELS[method]} ({MODE_LABELS[mode]})"
+                per_seed_makespans, per_seed_gaps = [], []
+                for s in SEEDS:
+                    d = load_drl_test_makespans(method, size, s, mode, split)
+                    if d is None:
+                        continue
+                    per_seed_makespans.append(np.mean(list(d.values())))
+                    if cpsat_data:
+                        common_inst = sorted(set(d.keys()) & set(cpsat_data.keys()))
+                        if common_inst:
+                            gaps = [(d[i] / cpsat_data[i] - 1) * 100 for i in common_inst]
+                            per_seed_gaps.append(np.mean(gaps))
+                if per_seed_makespans:
+                    table.loc[size, (label, "Makespan")] = np.mean(per_seed_makespans)
+                if per_seed_gaps:
+                    table.loc[size, (label, "Gap %")] = np.mean(per_seed_gaps)
+
+    out_dir = plots_dir(split)
+    xlsx_path = out_dir / "06_gap_table.xlsx"
+    with pd.ExcelWriter(xlsx_path, engine="openpyxl") as writer:
+        table.to_excel(writer, sheet_name="gap_table")
+    print(f"  Saved {split}/06_gap_table.xlsx ({len(table)} rows)")
+
+    print()
+    print(table.to_string())
+
+
+# Main
+
+def run_pipeline(split: str):
+    print("=" * 70)
+    print(f"Multi-Size Training Analysis -- split={split} ({SPLIT_LABELS[split]})")
+    print("=" * 70)
+    print(f"Script dir:    {SCRIPT_DIR}")
+    print(f"Benchmarks:    {BENCHMARKS_DIR}")
+    print(f"Cache out:     {cache_path(split)}")
+    print(f"Methods:       {METHODS}")
+    print(f"Modes:         {MODES}")
+    print(f"Seeds:         {SEEDS}")
+    print(f"Test sizes:    {TEST_SIZES}")
+    print(f"Hurink:        {HURINK_DATASETS}")
+    print(f"Baselines:     {BASELINES}")
+    print()
+
+    print("Loading data and building score matrices ...")
+    all_sizes = TEST_SIZES + HURINK_DATASETS
+    score_dict_per_size = {}
+    baseline_scores_per_size = {}
+
+    for size in all_sizes:
+        print(f"  Size {size}")
+        baseline_data = get_baseline_makespans(size)
+        c_best = compute_c_best(baseline_data)
+        if not c_best:
+            print(f"  [warn] No C_best for {size}, skipping")
+            continue
+
+        score_dict = {}
+        for method in METHODS:
+            for mode in MODES:
+                matrix, instances = build_score_matrix(method, size, c_best, mode, split)
+                if matrix.size == 0:
+                    continue
+                key = combo_key(method, mode)
+                score_dict[key] = matrix
+                print(f"    {key}: {matrix.shape}, IQM={np.mean(np.sort(matrix.flatten())[len(matrix.flatten())//4:3*len(matrix.flatten())//4]):.4f}")
+        score_dict_per_size[size] = score_dict
+
+        if score_dict:
+            first_key = next(iter(score_dict))
+            first_method, first_mode = split_combo_key(first_key)
+            _, instances = build_score_matrix(first_method, size, c_best, first_mode, split)
+            baseline_scores = {}
+            for b, b_data in baseline_data.items():
+                arr = build_baseline_score(b_data, c_best, instances)
+                if arr.size:
+                    baseline_scores[b] = arr
+
+            best_dr = compute_c_best_dr(baseline_data)
+            arr = build_baseline_score(best_dr, c_best, instances)
+            if arr.size:
+                baseline_scores["BestDR"] = arr
+
+            baseline_scores_per_size[size] = baseline_scores
+
+    cache = {}
+    steps = [
+        ("06 Gap Table",                                 lambda: create_gap_table(split), None),
+        ("Training Curves (aggregate)",                  lambda: analyze_training_curves(split), "training_curves"),
+        ("IQM Bars (bootstrap)",                          lambda: analyze_iqm_bars(score_dict_per_size, baseline_scores_per_size, TEST_SIZES), "iqm_bars"),
+        ("IQM Bars Hurink (bootstrap)",                   lambda: analyze_iqm_bars(score_dict_per_size, baseline_scores_per_size, HURINK_DATASETS), "iqm_bars_hurink"),
+        ("Performance Profiles (bootstrap)",              lambda: analyze_performance_profiles(score_dict_per_size, TEST_SIZES), "performance_profiles"),
+        ("Performance Profiles Hurink (bootstrap)",       lambda: analyze_performance_profiles(score_dict_per_size, HURINK_DATASETS), "performance_profiles_hurink"),
+        ("Probability of Improvement (bootstrap)",        lambda: analyze_probability_of_improvement(score_dict_per_size, TEST_SIZES), "probability_of_improvement"),
+        ("Probability of Improvement Hurink (bootstrap)", lambda: analyze_probability_of_improvement(score_dict_per_size, HURINK_DATASETS), "probability_of_improvement_hurink"),
+        ("Scaling (bootstrap)",                           lambda: analyze_scaling(score_dict_per_size, baseline_scores_per_size, TEST_SIZES), "scaling"),
+        ("Efficiency (solve time / forward time)",        lambda: analyze_efficiency(EFFICIENCY_SIZES, split), "efficiency"),
+    ]
+
+    total = len(steps)
+    t_start = time.time()
+
+    print()
+    for i, (name, fn, cache_key) in enumerate(steps, 1):
+        print(f"[{i}/{total}] {name} ...")
+        t0 = time.time()
+        out = fn()
+        elapsed = time.time() - t0
+        print(f"         done in {elapsed:.1f}s")
+        if cache_key is not None:
+            cache[cache_key] = out
+
+    with open(cache_path(split), "wb") as f:
+        pickle.dump(cache, f)
+    print(f"\nSaved analysis cache to {cache_path(split)}")
+
+    total_elapsed = time.time() - t_start
+    print()
+    print(f"[{split}] All done in {total_elapsed:.1f}s.")
+
+
+def main():
+    for split in SPLITS:
+        run_pipeline(split)
+        print()
+    print("All splits done. Run plot.py to (re)generate plots.")
+
+
+if __name__ == "__main__":
+    main()

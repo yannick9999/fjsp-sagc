@@ -40,8 +40,11 @@ SIZE_FOLDER_MAP = {
 # Brandimarte separate, only for the gap table at the end
 MK_SIZE = "Mk"
 
-# Baselines (dispatching rules). Add CP-SAT and GA later.
-BASELINES = ["MWR", "SPT", "MOR", "FIFO"]
+# Baselines (dispatching rules + CP-SAT). Add GA later.
+BASELINES = ["MWR", "SPT", "MOR", "FIFO", "CPSAT"]
+# The pure dispatching rules, without CP-SAT -- used for the "best dispatching
+# rule" pseudo-baseline in the IQM bar chart.
+DISPATCHING_RULES = ["MWR", "SPT", "MOR", "FIFO"]
 # One warm family (gold -> rust -> maroon), ordered by decreasing lightness so
 # the group reads as related and stays visually distinct from METHOD_COLORS.
 BASELINE_COLORS = {
@@ -49,9 +52,14 @@ BASELINE_COLORS = {
     "SPT": "#A0785A",     # amber/orange
     "MOR": "#8A9A3B",     # rust
     "FIFO": "#5BA8A0",    # brick red
-    "CPSAT": "#9A7090",   # later
+    "CPSAT": "#9A7090",
+    "BestDR": "#2E2E2E",  # best of the four dispatching rules, per instance
     "GA": "#C4A832",      # later
+}
+BASELINE_LABELS = {
+    "MWR": "MWR", "SPT": "SPT", "MOR": "MOR", "FIFO": "FIFO",
+    "CPSAT": "CP-SAT", "BestDR": "Best DR", "GA": "GA",
 }
 
 # rliable bootstrap replications
-BOOTSTRAP_REPS = 5000  # 50000 is standard, 5000 is enough for the pilot test
+BOOTSTRAP_REPS = 100  # 50000 is standard, 5000 is enough for the pilot test
