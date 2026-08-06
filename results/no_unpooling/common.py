@@ -75,7 +75,7 @@ BASELINE_COLORS = {
     "MOR": "#8A9A3B",     # rust
     "FIFO": "#5BA8A0",    # brick red
     "CPSAT": "#9A7090",
-    "BestDR": "#2E2E2E",  # best of the four dispatching rules, per instance
+    "BestDR": "#2E7D6B",  # best of the four dispatching rules, per instance -- teal, deliberately outside both the warm DR family and the cool method family so it reads as its own category
     "GA": "#C4A832",      # later
 }
 BASELINE_LABELS = {

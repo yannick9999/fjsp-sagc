@@ -27,6 +27,8 @@ from common import (
     BASELINE_LABELS,
     HURINK_DATASETS,
     HURINK_LABELS,
+    JOB_SWEEP_SIZES,
+    MACHINE_SWEEP_SIZES,
     METHOD_COLORS,
     METHOD_LABELS,
     METHODS,
@@ -140,7 +142,13 @@ def plot_iqm_bars(data: dict, sizes: list[str], out_name: str, title: str, figsi
     exclude = exclude or set()
     mode_order = ["sample", "greedy"]
     combos = [(method, mode) for mode in mode_order for method in METHODS]
-    baselines = baseline_keys or []
+    baseline_keys = baseline_keys or []
+    # CP-SAT is the normalization anchor (score = C_cpsat / C), so its own
+    # score is trivially ~1 everywhere -- shown as a reference line instead
+    # of a bar, which also makes it obvious when a bar exceeds it (CP-SAT
+    # timing out on larger instances without proving optimality).
+    show_cpsat_line = "CPSAT" in baseline_keys
+    baselines = [b for b in baseline_keys if b != "CPSAT"]
 
     n_sizes = len(sizes)
     n_items = len(combos) + len(baselines)
@@ -212,11 +220,20 @@ def plot_iqm_bars(data: dict, sizes: list[str], out_name: str, title: str, figsi
     ax.set_xticklabels(sizes, fontsize=13)
     ax.set_xlim(group_positions[0] - 0.4, group_positions[-1] + n_items * bar_width + 0.4)
 
+    # CP-SAT reference line at 1.0, drawn after the x-limits are set so it
+    # spans the full width of the axes.
+    cpsat_handle = None
+    if show_cpsat_line:
+        max_top = max(max_top, 1.0)
+        min_bottom = min(min_bottom, 1.0)
+        cpsat_handle = ax.axhline(1.0, color=BASELINE_COLORS.get("CPSAT", "black"),
+                                  linewidth=1.8, zorder=4)
+
     # Y-axis -- ceiling/floor grow with the data so bars/error bars that
     # exceed 1.0 (as some Hurink combos do) or fall below 0.9 (as some
     # baselines do) stay fully visible instead of clipping.
     ax.set_ylim(min_bottom - 0.02, max_top + 0.02)
-    ax.set_ylabel("IQM Score (C_best / C_drl)", fontsize=15, labelpad=8)
+    ax.set_ylabel("IQM Score (C_CP-SAT / C)", fontsize=15, labelpad=8)
     ax.tick_params(axis='y', labelsize=13)
 
     # Grid and spines
@@ -226,8 +243,9 @@ def plot_iqm_bars(data: dict, sizes: list[str], out_name: str, title: str, figsi
     ax.spines['right'].set_visible(False)
 
     # Legend top right inside plot
-    all_handles = combo_bar_handles + baseline_bar_handles
+    all_handles = combo_bar_handles + ([cpsat_handle] if cpsat_handle else []) + baseline_bar_handles
     all_labels = [f"{METHOD_LABELS[m]} ({MODE_LABELS[mo]})" for m, mo in combos] + \
+        (["CP-SAT"] if cpsat_handle else []) + \
         [BASELINE_LABELS.get(b, b) for b in baselines]
     ax.legend(all_handles, all_labels,
               loc="upper right", fontsize=11,
@@ -445,7 +463,7 @@ def plot_scaling(data: dict, out_dir: Path):
     ax.set_xticks(x_pos)
     ax.set_xticklabels(x_labels, fontsize=11)
     ax.set_xlabel("Instance Size", fontsize=12, labelpad=8)
-    ax.set_ylabel("IQM Score (C_best / C_drl)", fontsize=12, labelpad=8)
+    ax.set_ylabel("IQM Score (C_CP-SAT / C)", fontsize=12, labelpad=8)
     ax.tick_params(axis='y', labelsize=11)
     ax.set_title("Scaling: Performance over Instance Size", fontsize=13, fontweight='bold', pad=12)
 
@@ -539,13 +557,17 @@ def plot_split(split: str):
     steps = [
         ("01 Training Curves",
          lambda: plot_training_curves(data["training_curves"], split, out_dir)),
-        ("02 IQM Bars",
-         lambda: plot_iqm_bars(data["iqm_bars"], TEST_SIZES, "02_iqm_bars.png",
-                               f"Interquartile Mean with 95% Bootstrap CIs{suffix}", (16, 7), out_dir,
+        ("02 IQM Bars (Jobs)",
+         lambda: plot_iqm_bars(data["iqm_bars_jobs"], JOB_SWEEP_SIZES, "02_iqm_bars_jobs.png",
+                               f"Interquartile Mean with 95% Bootstrap CIs (Jobs Sweep, m=10){suffix}", (14, 7), out_dir,
                                exclude={("200x10", "sagc", "sample"), ("200x10", "nopooling", "sample")},
                                baseline_keys=["CPSAT", "BestDR"])),
-        ("02b IQM Bars (Hurink)",
-         lambda: plot_iqm_bars(data["iqm_bars_hurink"], HURINK_DATASETS, "02b_iqm_bars_hurink.png",
+        ("02b IQM Bars (Machines)",
+         lambda: plot_iqm_bars(data["iqm_bars_machines"], MACHINE_SWEEP_SIZES, "02b_iqm_bars_machines.png",
+                               f"Interquartile Mean with 95% Bootstrap CIs (Machines Sweep, j=20){suffix}", (9, 7), out_dir,
+                               baseline_keys=["CPSAT", "BestDR"])),
+        ("02c IQM Bars (Hurink)",
+         lambda: plot_iqm_bars(data["iqm_bars_hurink"], HURINK_DATASETS, "02c_iqm_bars_hurink.png",
                                f"Interquartile Mean with 95% Bootstrap CIs (Hurink){suffix}", (11, 7), out_dir,
                                baseline_keys=["CPSAT", "BestDR"])),
         ("03 Performance Profiles",

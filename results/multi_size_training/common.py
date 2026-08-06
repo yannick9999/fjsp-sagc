@@ -65,9 +65,10 @@ def plots_dir(split: str) -> Path:
 # Test sizes actually generalize across *both* jobs and machines here (not
 # just jobs like pilot_test/no_unpooling), once as display label and once as
 # folder name.
-TEST_SIZES = ["10x10", "20x10", "20x20", "20x30", "30x10", "40x10", "50x10", "100x10", "200x10"]
+TEST_SIZES = ["10x10", "20x5", "20x10", "20x20", "20x30", "30x10", "40x10", "50x10", "100x10", "200x10"]
 SIZE_FOLDER_MAP = {
     "10x10": "1010",
+    "20x5": "2005",
     "20x10": "2010",
     "20x20": "2020",
     "20x30": "2030",
@@ -78,6 +79,12 @@ SIZE_FOLDER_MAP = {
     "200x10": "20010",
 }
 # No Brandimarte (Mk) here -- it wasn't part of the multi-size test sweep.
+
+# TEST_SIZES split by which dimension is swept, for the IQM bar chart --
+# combining both sweeps in one plot made machines-fixed and jobs-fixed
+# comparisons hard to read side by side.
+JOB_SWEEP_SIZES = ["10x10", "20x10", "30x10", "40x10", "50x10", "100x10", "200x10"]     # machines=10, jobs vary
+MACHINE_SWEEP_SIZES = ["20x5", "20x10", "20x20", "20x30"]                               # jobs=20, machines vary
 
 # Hurink datasets: not "sizes" in the scaling sense, run through the same
 # bootstrap pipeline as TEST_SIZES but plotted separately.
@@ -104,7 +111,7 @@ BASELINE_COLORS = {
     "MOR": "#8A9A3B",     # rust
     "FIFO": "#5BA8A0",    # brick red
     "CPSAT": "#9A7090",
-    "BestDR": "#2E2E2E",  # best of the four dispatching rules, per instance
+    "BestDR": "#2E7D6B",  # best of the four dispatching rules, per instance -- teal, deliberately outside both the warm DR family and the cool method family so it reads as its own category
     "GA": "#C4A832",      # later
 }
 BASELINE_LABELS = {

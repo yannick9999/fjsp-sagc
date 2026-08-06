@@ -341,8 +341,8 @@ def create_gap_table():
     Rows are instance sizes (plus Mk/Brandimarte at the end). Columns are
     CP-SAT, the four dispatching rules, and the DRL methods, each with a
     Makespan and a Gap % (relative to CP-SAT) sub-column. Sizes without
-    CP-SAT data (e.g. 200x10, Mk) get NaN gaps. Saved as .xlsx, not a plot,
-    so it doesn't go through plot.py.
+    CP-SAT data (e.g. Mk) get NaN gaps. Saved as .xlsx, not a plot, so it
+    doesn't go through plot.py.
     """
     all_sizes = TEST_SIZES + [MK_SIZE]
     col_methods = ["CPSAT"] + DISPATCHING_RULES + [METHOD_LABELS[m] for m in METHODS]

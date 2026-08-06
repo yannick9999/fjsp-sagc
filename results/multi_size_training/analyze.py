@@ -30,6 +30,8 @@ from common import (
     DISPATCHING_RULES,
     EFFICIENCY_SIZES,
     HURINK_DATASETS,
+    JOB_SWEEP_SIZES,
+    MACHINE_SWEEP_SIZES,
     METHOD_DIRS,
     METHOD_LABELS,
     METHODS,
@@ -130,6 +132,21 @@ def load_benchmark_makespans(rule: str, size: str) -> dict[str, float] | None:
     return dict(zip(df["instance_name"].astype(str), df["makespan"].astype(float)))
 
 
+def load_cpsat_status(size: str) -> dict[str, str] | None:
+    """Loads the CP-SAT solver status (OPTIMAL/FEASIBLE) per instance.
+
+    Returns None if the CSV is missing or doesn't have a status column yet
+    (e.g. Hurink, where CP-SAT data hasn't been backfilled with status).
+    """
+    csv = BENCHMARKS_DIR / "CPSAT" / f"{SIZE_FOLDER_MAP[size]}.csv"
+    if not csv.exists():
+        return None
+    df = pd.read_csv(csv)
+    if "status" not in df.columns:
+        return None
+    return dict(zip(df["instance_name"].astype(str), df["status"].astype(str)))
+
+
 # Score matrices
 
 def get_baseline_makespans(size: str) -> dict[str, dict[str, float]]:
@@ -169,11 +186,13 @@ def compute_c_best_dr(baseline_data: dict[str, dict[str, float]]) -> dict[str, f
     return compute_c_best(dr_data)
 
 
-def build_score_matrix(method: str, size: str, c_best: dict[str, float],
+def build_score_matrix(method: str, size: str, c_cpsat: dict[str, float],
                        mode: str, split: str) -> tuple[np.ndarray, list[str]]:
     """Builds the normalized score matrix for a method, size, mode, split.
 
-    Score = C_best / C_drl (higher = better).
+    Score = C_cpsat / C_drl (higher = better; > 1 means beating CP-SAT,
+    which happens e.g. at 200x10 where CP-SAT hits its time limit before
+    reaching the true optimum).
 
     Returns:
         (matrix shape (num_seeds, num_instances), list of instance_names in
@@ -190,8 +209,8 @@ def build_score_matrix(method: str, size: str, c_best: dict[str, float],
     common = set(per_seed_dicts[0].keys())
     for d in per_seed_dicts[1:]:
         common &= set(d.keys())
-    if c_best:
-        common &= set(c_best.keys())
+    if c_cpsat:
+        common &= set(c_cpsat.keys())
     instances = sorted(common)
 
     if not instances:
@@ -200,14 +219,14 @@ def build_score_matrix(method: str, size: str, c_best: dict[str, float],
     matrix = np.zeros((len(SEEDS), len(instances)))
     for i, s in enumerate(SEEDS):
         for j, inst in enumerate(instances):
-            matrix[i, j] = c_best[inst] / per_seed_dicts[i][inst]
+            matrix[i, j] = c_cpsat[inst] / per_seed_dicts[i][inst]
     return matrix, instances
 
 
-def build_baseline_score(baseline_makespans: dict[str, float], c_best: dict[str, float],
+def build_baseline_score(baseline_makespans: dict[str, float], c_cpsat: dict[str, float],
                          instances: list[str]) -> np.ndarray:
     """Score array for a deterministic baseline (shape (1, num_instances))."""
-    scores = np.array([c_best[i] / baseline_makespans[i] for i in instances if i in baseline_makespans])
+    scores = np.array([c_cpsat[i] / baseline_makespans[i] for i in instances if i in baseline_makespans])
     return scores.reshape(1, -1)
 
 
@@ -435,24 +454,37 @@ def create_gap_table(split: str):
     for one split (indist or ood).
 
     Rows are instance sizes plus the Hurink datasets. Columns are CP-SAT, the
-    four dispatching rules, and each (method, mode) combo, each with a
-    Makespan and a Gap % (relative to CP-SAT) sub-column. Sizes/datasets
-    without CP-SAT data (200x10, Hurink) get NaN gaps. Saved as .xlsx, not a
-    plot, so it doesn't go through plot.py.
+    four dispatching rules, and each (method, mode) combo. CP-SAT gets a
+    Makespan and an "Optimal" sub-column ("n/N" instances solved to proven
+    optimality, vs. hitting the time limit -- blank for sizes/datasets where
+    the CP-SAT CSV doesn't have a status column yet, currently the Hurink
+    sets); the other columns get a Makespan and a Gap % (relative to CP-SAT)
+    sub-column. Sizes/datasets without CP-SAT data (Hurink) get NaN gaps.
+    Saved as .xlsx, not a plot, so it doesn't go through plot.py.
     """
     all_sizes = TEST_SIZES + HURINK_DATASETS
     combo_labels = [f"{METHOD_LABELS[m]} ({MODE_LABELS[mo]})" for m in METHODS for mo in MODES]
     col_methods = ["CPSAT"] + DISPATCHING_RULES + combo_labels
-    columns = pd.MultiIndex.from_product([col_methods, ["Makespan", "Gap %"]])
-    table = pd.DataFrame(index=pd.Index(all_sizes, name="size"), columns=columns, dtype=float)
+    col_tuples = []
+    for m in col_methods:
+        col_tuples.append((m, "Makespan"))
+        if m == "CPSAT":
+            col_tuples.append((m, "Optimal"))
+        else:
+            col_tuples.append((m, "Gap %"))
+    columns = pd.MultiIndex.from_tuples(col_tuples)
+    table = pd.DataFrame(index=pd.Index(all_sizes, name="size"), columns=columns)
 
     for size in all_sizes:
         baseline_data = get_baseline_makespans(size)
         cpsat_data = baseline_data.get("CPSAT")
+        cpsat_status = load_cpsat_status(size)
 
         if cpsat_data:
             table.loc[size, ("CPSAT", "Makespan")] = np.mean(list(cpsat_data.values()))
-            table.loc[size, ("CPSAT", "Gap %")] = 0.0
+            if cpsat_status:
+                n_optimal = sum(1 for v in cpsat_status.values() if v == "OPTIMAL")
+                table.loc[size, ("CPSAT", "Optimal")] = f"{n_optimal}/{len(cpsat_status)}"
 
         for rule in DISPATCHING_RULES:
             b_data = baseline_data.get(rule)
@@ -519,15 +551,15 @@ def run_pipeline(split: str):
     for size in all_sizes:
         print(f"  Size {size}")
         baseline_data = get_baseline_makespans(size)
-        c_best = compute_c_best(baseline_data)
-        if not c_best:
-            print(f"  [warn] No C_best for {size}, skipping")
+        c_cpsat = baseline_data.get("CPSAT")
+        if not c_cpsat:
+            print(f"  [warn] No CP-SAT data for {size}, skipping")
             continue
 
         score_dict = {}
         for method in METHODS:
             for mode in MODES:
-                matrix, instances = build_score_matrix(method, size, c_best, mode, split)
+                matrix, instances = build_score_matrix(method, size, c_cpsat, mode, split)
                 if matrix.size == 0:
                     continue
                 key = combo_key(method, mode)
@@ -538,15 +570,15 @@ def run_pipeline(split: str):
         if score_dict:
             first_key = next(iter(score_dict))
             first_method, first_mode = split_combo_key(first_key)
-            _, instances = build_score_matrix(first_method, size, c_best, first_mode, split)
+            _, instances = build_score_matrix(first_method, size, c_cpsat, first_mode, split)
             baseline_scores = {}
             for b, b_data in baseline_data.items():
-                arr = build_baseline_score(b_data, c_best, instances)
+                arr = build_baseline_score(b_data, c_cpsat, instances)
                 if arr.size:
                     baseline_scores[b] = arr
 
             best_dr = compute_c_best_dr(baseline_data)
-            arr = build_baseline_score(best_dr, c_best, instances)
+            arr = build_baseline_score(best_dr, c_cpsat, instances)
             if arr.size:
                 baseline_scores["BestDR"] = arr
 
@@ -556,7 +588,8 @@ def run_pipeline(split: str):
     steps = [
         ("06 Gap Table",                                 lambda: create_gap_table(split), None),
         ("Training Curves (aggregate)",                  lambda: analyze_training_curves(split), "training_curves"),
-        ("IQM Bars (bootstrap)",                          lambda: analyze_iqm_bars(score_dict_per_size, baseline_scores_per_size, TEST_SIZES), "iqm_bars"),
+        ("IQM Bars Jobs (bootstrap)",                     lambda: analyze_iqm_bars(score_dict_per_size, baseline_scores_per_size, JOB_SWEEP_SIZES), "iqm_bars_jobs"),
+        ("IQM Bars Machines (bootstrap)",                 lambda: analyze_iqm_bars(score_dict_per_size, baseline_scores_per_size, MACHINE_SWEEP_SIZES), "iqm_bars_machines"),
         ("IQM Bars Hurink (bootstrap)",                   lambda: analyze_iqm_bars(score_dict_per_size, baseline_scores_per_size, HURINK_DATASETS), "iqm_bars_hurink"),
         ("Performance Profiles (bootstrap)",              lambda: analyze_performance_profiles(score_dict_per_size, TEST_SIZES), "performance_profiles"),
         ("Performance Profiles Hurink (bootstrap)",       lambda: analyze_performance_profiles(score_dict_per_size, HURINK_DATASETS), "performance_profiles_hurink"),

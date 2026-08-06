@@ -71,7 +71,7 @@ def plot_training_curves(data: dict):
 
     # Axis labels
     ax.set_xlabel("Environment Steps (×10⁶)", fontsize=12, labelpad=8)
-    ax.set_ylabel("Validation Makespan\n(avg over 100 instances)", fontsize=12, labelpad=8)
+    ax.set_ylabel("Validation Makespan", fontsize=12, labelpad=8)
     ax.set_title("Training Curves on 20×10 Validation Set", fontsize=13, fontweight='bold', pad=12)
 
     # X-axis: show 0, 1, 2, 3, 4 with "×10⁶" in axis label
@@ -123,7 +123,13 @@ def plot_iqm_bars(data: dict, sizes: list[str], out_name: str, title: str, figsi
     exclude = exclude or set()
     mode_order = ["sample", "greedy"]
     combos = [(method, mode) for mode in mode_order for method in METHODS]
-    baselines = baseline_keys or []
+    baseline_keys = baseline_keys or []
+    # CP-SAT is the normalization anchor (score = C_cpsat / C), so its own
+    # score is trivially ~1 everywhere -- shown as a reference line instead
+    # of a bar, which also makes it obvious when a bar exceeds it (CP-SAT
+    # timing out on larger instances without proving optimality).
+    show_cpsat_line = "CPSAT" in baseline_keys
+    baselines = [b for b in baseline_keys if b != "CPSAT"]
 
     n_sizes = len(sizes)
     n_items = len(combos) + len(baselines)
@@ -195,11 +201,20 @@ def plot_iqm_bars(data: dict, sizes: list[str], out_name: str, title: str, figsi
     ax.set_xticklabels(sizes, fontsize=13)
     ax.set_xlim(group_positions[0] - 0.4, group_positions[-1] + n_items * bar_width + 0.4)
 
+    # CP-SAT reference line at 1.0, drawn after the x-limits are set so it
+    # spans the full width of the axes.
+    cpsat_handle = None
+    if show_cpsat_line:
+        max_top = max(max_top, 1.0)
+        min_bottom = min(min_bottom, 1.0)
+        cpsat_handle = ax.axhline(1.0, color=BASELINE_COLORS.get("CPSAT", "black"),
+                                  linewidth=1.8, zorder=4)
+
     # Y-axis -- ceiling/floor grow with the data so bars/error bars that
     # exceed 1.0 (as some Hurink combos do) or fall below 0.9 (as some
     # baselines do) stay fully visible instead of clipping.
     ax.set_ylim(min_bottom - 0.02, max_top + 0.02)
-    ax.set_ylabel("IQM Score (C_best / C_drl)", fontsize=15, labelpad=8)
+    ax.set_ylabel("IQM Score (C_CP-SAT / C)", fontsize=15, labelpad=8)
     ax.tick_params(axis='y', labelsize=13)
 
     # Grid and spines
@@ -209,8 +224,9 @@ def plot_iqm_bars(data: dict, sizes: list[str], out_name: str, title: str, figsi
     ax.spines['right'].set_visible(False)
 
     # Legend top right inside plot
-    all_handles = combo_bar_handles + baseline_bar_handles
+    all_handles = combo_bar_handles + ([cpsat_handle] if cpsat_handle else []) + baseline_bar_handles
     all_labels = [f"{METHOD_LABELS[m]} ({MODE_LABELS[mo]})" for m, mo in combos] + \
+        (["CP-SAT"] if cpsat_handle else []) + \
         [BASELINE_LABELS.get(b, b) for b in baselines]
     ax.legend(all_handles, all_labels,
               loc="upper right", fontsize=11,
@@ -427,7 +443,7 @@ def plot_scaling(data: dict):
     ax.set_xticks(x_pos)
     ax.set_xticklabels(x_labels, fontsize=11)
     ax.set_xlabel("Instance Size", fontsize=12, labelpad=8)
-    ax.set_ylabel("IQM Score (C_best / C_drl)", fontsize=12, labelpad=8)
+    ax.set_ylabel("IQM Score (C_CP-SAT / C)", fontsize=12, labelpad=8)
     ax.tick_params(axis='y', labelsize=11)
     ax.set_title("Scaling: Performance over Instance Size", fontsize=13, fontweight='bold', pad=12)
 
