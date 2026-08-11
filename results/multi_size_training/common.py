@@ -120,7 +120,7 @@ BASELINE_LABELS = {
 }
 
 # rliable bootstrap replications
-BOOTSTRAP_REPS = 100  # 50000 is standard, 5000+ for real numbers, 100 while iterating
+BOOTSTRAP_REPS = 5000  # 50000 is standard, 5000+ for real numbers, 100 while iterating
 
 
 def combo_key(method: str, mode: str) -> str:

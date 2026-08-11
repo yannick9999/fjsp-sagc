@@ -84,7 +84,7 @@ BASELINE_LABELS = {
 }
 
 # rliable bootstrap replications
-BOOTSTRAP_REPS = 100  # 50000 is standard, 5000 is enough for the pilot test
+BOOTSTRAP_REPS = 5000  # 50000 is standard, 5000 is enough for the pilot test
 
 
 def combo_key(method: str, mode: str) -> str:
