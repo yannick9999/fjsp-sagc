@@ -7,6 +7,32 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+# Thesis style, applied only to the combined score grid figure via
+# plt.rc_context() so the table and the other (exploratory) plots keep
+# their existing look.
+
+TEXTWIDTH = 425 / 72.27
+
+
+def set_thesis_style():
+    return {
+        "font.family": "serif",
+        "mathtext.fontset": "cm",
+        "font.size": 9,
+        "axes.labelsize": 9,
+        "axes.titlesize": 9,
+        "xtick.labelsize": 8,
+        "ytick.labelsize": 8,
+        "legend.fontsize": 8,
+        "lines.linewidth": 1.2,
+        "axes.linewidth": 0.6,
+        "grid.linewidth": 0.5,
+        "figure.constrained_layout.use": True,
+        "savefig.format": "pdf",
+        "axes.formatter.use_mathtext": True,
+    }
+
+
 # Config
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -51,6 +77,34 @@ RANDOM_COLOR = "#95a5a6"
 RANDOM_STYLE = dict(color=RANDOM_COLOR, linestyle="--", linewidth=1.8,
                     marker="s", markersize=5, label="Random (avg. all sizes)")
 EPISODE_BINS = 10
+
+# Colors/linestyles for the combined score grid figure only -- SIZE_COLORS
+# above stays untouched for the other plots. The seven ten-machine sizes get
+# a sequential colormap ordered by instance size, so curve order is directly
+# readable; the two five-machine sizes get their own warm color family
+# (well outside the restricted viridis range) so they read as their own
+# group and stay distinguishable from each other.
+GRID_TEN_MACHINE_SIZES = ["15x10", "20x10", "30x10", "40x10", "50x10", "100x10", "200x10"]
+GRID_FIVE_MACHINE_SIZES = ["10x5", "20x5"]
+GRID_SIZE_ORDER = GRID_TEN_MACHINE_SIZES + GRID_FIVE_MACHINE_SIZES
+
+# Legend reading order: ascending instance size, interleaving the five- and
+# ten-machine sizes -- matches the x-axis tick order used elsewhere (e.g.
+# the IQM bar plots), unlike GRID_SIZE_ORDER above which groups by machine
+# count for plotting/coloring purposes.
+GRID_LEGEND_ORDER = ["10x5", "15x10", "20x5", "20x10", "30x10", "40x10", "50x10", "100x10", "200x10"]
+
+GRID_SIZE_COLORS = {
+    size: plt.cm.viridis(v)
+    for size, v in zip(GRID_TEN_MACHINE_SIZES, np.linspace(0.05, 0.72, len(GRID_TEN_MACHINE_SIZES)))
+}
+GRID_SIZE_COLORS.update({"10x5": "#E8A33D", "20x5": "#A6521A"})
+
+SIZE_LINESTYLES = {size: "-" for size in GRID_TEN_MACHINE_SIZES}
+SIZE_LINESTYLES.update({"10x5": "--", "20x5": "-."})
+
+SIZE_MARKERS = {size: "o" for size in GRID_TEN_MACHINE_SIZES}
+SIZE_MARKERS.update({"10x5": "o", "20x5": "s"})
 
 
 # Data loading
@@ -308,24 +362,70 @@ def plot_episode_frontier(data):
     print("  Saved episode_frontier_dist.png")
 
 
-def plot_episode_score(data, score_fn, ylabel, title, fname):
-    fig, ax = plt.subplots(figsize=(8, 5))
+def _legend_row_major_order(items, ncol):
+    """Reorder `items` so a matplotlib legend with `ncol` columns -- which
+    fills column-major -- ends up *displaying* them in row-major (left to
+    right, top to bottom) order."""
+    nrows = -(-len(items) // ncol)  # ceil division
+    padded = list(items) + [None] * (nrows * ncol - len(items))
+    grid = [padded[r * ncol:(r + 1) * ncol] for r in range(nrows)]
+    return [grid[r][c] for c in range(ncol) for r in range(nrows) if grid[r][c] is not None]
 
-    for size, df in data.items():
-        score = score_fn(df)
-        ax.plot(score.index * 10 + 5, score.values,
-                color=SIZE_COLORS[size], linewidth=2,
-                marker="o", markersize=4, label=size)
 
-    ax.axhline(0.0, color="black", linestyle=":", linewidth=1, zorder=0)
-    ax.set_xlabel("Episode progress (%)")
-    ax.set_ylabel(ylabel)
-    ax.set_title(title)
-    ax.legend(fontsize=7, ncol=2)
-    fig.tight_layout()
-    fig.savefig(OUT_DIR / fname, dpi=150)
-    plt.close(fig)
-    print(f"  Saved {fname}")
+def plot_score_grid(data):
+    """Combined 2x2 figure with all four score curves, for the thesis."""
+    panels = [
+        (0, 0, lambda df: binned_score_delta(df, "critical_retention"), "Critical retention"),
+        (0, 1, lambda df: binned_score_delta(df, "successor_retention"), "Successor retention"),
+        (1, 0, binned_score_frontier, "Frontier distance"),
+        (1, 1, binned_score_slack, "Slack correlation"),
+    ]
+
+    with plt.rc_context(set_thesis_style()):
+        fig, axes = plt.subplots(2, 2, sharex=True, figsize=(TEXTWIDTH, TEXTWIDTH * 0.85))
+
+        handles_by_size = {}
+        for row, col, score_fn, ylabel in panels:
+            ax = axes[row, col]
+            for size in GRID_SIZE_ORDER:
+                df = data.get(size)
+                if df is None:
+                    continue
+                score = score_fn(df)
+                lines = ax.plot(score.index * 10 + 5, score.values,
+                                color=GRID_SIZE_COLORS[size], linestyle=SIZE_LINESTYLES[size],
+                                marker=SIZE_MARKERS[size], markersize=2.5, label=size)
+                if size not in handles_by_size:
+                    handles_by_size[size] = lines[0]
+
+            ax.axhline(0.0, color="black", linestyle=":", linewidth=1, zorder=0)
+            ax.set_ylabel(ylabel)
+            ax.grid(True, axis="y", color="#CCCCCC")
+            ax.set_axisbelow(True)
+            ax.spines["top"].set_visible(False)
+            ax.spines["right"].set_visible(False)
+
+        axes[1, 0].set_xlabel("Episode progress (%)")
+        axes[1, 1].set_xlabel("Episode progress (%)")
+
+        # Legend reads left-to-right, top-to-bottom in ascending instance
+        # size (matching the x-axis order used elsewhere); reorder into
+        # matplotlib's column-major fill so that row-major order is what's
+        # actually displayed.
+        legend_ncol = 5
+        present_sizes = [s for s in GRID_LEGEND_ORDER if s in handles_by_size]
+        legend_sizes = _legend_row_major_order(present_sizes, legend_ncol)
+        legend_handles = [handles_by_size[s] for s in legend_sizes]
+
+        # "outside lower center" (rather than a manual bbox_to_anchor) is
+        # constrained-layout-aware, so the figure reserves real space for
+        # the legend below the panels instead of clipping it at save time.
+        fig.legend(legend_handles, legend_sizes, loc="outside lower center",
+                   ncol=legend_ncol, frameon=False)
+
+        fig.savefig(OUT_DIR / "diagnostics_score_grid.pdf")
+        plt.close(fig)
+        print("  Saved diagnostics_score_grid.pdf")
 
 
 # Main
@@ -357,27 +457,8 @@ def main():
                  "episode_slack_correlation.png", hline=0.0)
     plot_episode_frontier(data)
 
-    print("\nGenerating score plots ...")
-    plot_episode_score(
-        data, lambda df: binned_score_delta(df, "critical_retention"),
-        "Critical retention score (learned - random)",
-        "Critical retention score over episode",
-        "episode_critical_retention_score.png")
-    plot_episode_score(
-        data, lambda df: binned_score_delta(df, "successor_retention"),
-        "Successor retention score (learned - random)",
-        "Successor retention score over episode",
-        "episode_successor_retention_score.png")
-    plot_episode_score(
-        data, binned_score_frontier,
-        "Frontier distance score (random - learned, normalized)",
-        "Frontier distance score over episode",
-        "episode_frontier_dist_score.png")
-    plot_episode_score(
-        data, binned_score_slack,
-        "Slack correlation score (-Spearman)",
-        "Slack correlation score over episode",
-        "episode_slack_correlation_score.png")
+    print("\nGenerating score grid ...")
+    plot_score_grid(data)
 
     print("\nDone.")
 

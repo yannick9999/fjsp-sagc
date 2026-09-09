@@ -31,20 +31,13 @@ from common import (
     MODES,
     PLOTS_DIR,
     TEST_SIZES,
+    TEXTWIDTH,
     combo_key,
+    set_thesis_style,
     split_combo_key,
 )
 
-mpl.rcParams.update({
-    'font.size': 8,
-    'axes.titlesize': 8,
-    'axes.labelsize': 8,
-    'xtick.labelsize': 7,
-    'ytick.labelsize': 7,
-    'legend.fontsize': 7,
-    'figure.dpi': 150,
-    'savefig.dpi': 300,
-})
+set_thesis_style()
 
 
 def load_analysis() -> dict:
@@ -54,8 +47,17 @@ def load_analysis() -> dict:
         return pickle.load(f)
 
 
+def save_fig(fig, stem: str) -> None:
+    """Save `fig` as both PDF (for the thesis) and PNG (for quick viewing),
+    with the "song_fw_" prefix common to all figures from this script."""
+    name = f"song_fw_{stem}"
+    fig.savefig(PLOTS_DIR / f"{name}.pdf")
+    fig.savefig(PLOTS_DIR / f"{name}.png", dpi=300)
+    print(f"  Saved {name}.pdf / .png")
+
+
 def plot_training_curves(data: dict):
-    fig, ax = plt.subplots(figsize=(9, 5))
+    fig, ax = plt.subplots(figsize=(TEXTWIDTH, TEXTWIDTH * 0.45))
 
     for method in METHODS:
         curve = data.get(method)
@@ -65,14 +67,13 @@ def plot_training_curves(data: dict):
         color = METHOD_COLORS[method]
         label = METHOD_LABELS[method]
         ax.plot(curve["env_steps"], curve["mean"],
-                color=color, label=label, linewidth=2.5, zorder=3)
+                color=color, label=label, zorder=3)
         ax.fill_between(curve["env_steps"], curve["lo"], curve["hi"],
                         color=color, alpha=0.15, zorder=2)
 
     # Axis labels
-    ax.set_xlabel("Environment Steps (×10⁶)", fontsize=12, labelpad=8)
-    ax.set_ylabel("Validation Makespan", fontsize=12, labelpad=8)
-    ax.set_title("Training Curves on 20×10 Validation Set", fontsize=13, fontweight='bold', pad=12)
+    ax.set_xlabel(r"Environment steps ($\times 10^6$)", labelpad=8)
+    ax.set_ylabel("Validation makespan", labelpad=8)
 
     # X-axis: show 0, 1, 2, 3, 4 with "×10⁶" in axis label
     ax.xaxis.set_major_locator(mticker.MultipleLocator(1e6))
@@ -84,30 +85,25 @@ def plot_training_curves(data: dict):
     ax.set_xlim(left=0)
 
     # Horizontal grid lines only
-    ax.grid(True, axis='y', color='#E0E0E0', linewidth=0.8, zorder=1)
+    ax.grid(True, axis='y', color='#CCCCCC', linewidth=0.8, zorder=1)
     ax.set_axisbelow(True)
 
     # Remove top and right spines
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
 
-    # Background colors
-    ax.set_facecolor('#F9F9F9')
-    fig.patch.set_facecolor('white')
-
     # Legend
     ax.legend(frameon=True, framealpha=0.9, edgecolor='#CCCCCC',
-              fontsize=11, loc='upper right')
+              loc='upper right')
 
-    fig.tight_layout()
-    fig.savefig(PLOTS_DIR / "01_training_curves.png", dpi=300, bbox_inches="tight")
+    save_fig(fig, "01_training_curves")
     plt.close(fig)
-    print("  Saved 01_training_curves.png")
 
 
-def plot_iqm_bars(data: dict, sizes: list[str], out_name: str, title: str, figsize: tuple[float, float],
+def plot_iqm_bars(data: dict, sizes: list[str], out_stem: str, figsize: tuple[float, float],
                   exclude: set[tuple[str, str, str]] | None = None,
-                  baseline_keys: list[str] | None = None):
+                  baseline_keys: list[str] | None = None,
+                  legend_ncol: int = 3):
     """IQM as a grouped bar chart. One bar per (method, mode), optionally plus
     one bar per entry in `baseline_keys` (e.g. CP-SAT, best dispatching rule).
 
@@ -138,8 +134,6 @@ def plot_iqm_bars(data: dict, sizes: list[str], out_name: str, title: str, figsi
     group_positions = np.arange(n_sizes) * (n_items * bar_width + group_gap)
 
     fig, ax = plt.subplots(figsize=figsize)
-    fig.patch.set_facecolor('white')
-    ax.set_facecolor('#F9F9F9')
 
     # Draw bars
     combo_bar_handles = []
@@ -171,7 +165,7 @@ def plot_iqm_bars(data: dict, sizes: list[str], out_name: str, title: str, figsi
         bars = ax.bar(offsets, means, width=bar_width,
                       color=METHOD_COLORS[method], hatch=MODE_HATCHES[mode],
                       yerr=[err_low, err_high],
-                      capsize=2, error_kw={"elinewidth": 0.8, "capthick": 0.8},
+                      capsize=0, error_kw={"elinewidth": 1.0, "ecolor": "black"},
                       edgecolor="white", linewidth=0.6, zorder=3)
         combo_bar_handles.append(bars[0])
 
@@ -198,7 +192,7 @@ def plot_iqm_bars(data: dict, sizes: list[str], out_name: str, title: str, figsi
     # X-axis group labels
     group_centers = group_positions + (n_items - 1) * bar_width / 2
     ax.set_xticks(group_centers)
-    ax.set_xticklabels(sizes, fontsize=13)
+    ax.set_xticklabels(sizes)
     ax.set_xlim(group_positions[0] - 0.4, group_positions[-1] + n_items * bar_width + 0.4)
 
     # CP-SAT reference line at 1.0, drawn after the x-limits are set so it
@@ -213,48 +207,36 @@ def plot_iqm_bars(data: dict, sizes: list[str], out_name: str, title: str, figsi
     # Y-axis -- ceiling/floor grow with the data so bars/error bars that
     # exceed 1.0 (as some Hurink combos do) or fall below 0.9 (as some
     # baselines do) stay fully visible instead of clipping.
-    ax.set_ylim(min_bottom - 0.02, max_top + 0.02)
-    ax.set_ylabel("IQM Score (C_CP-SAT / C)", fontsize=15, labelpad=8)
-    ax.tick_params(axis='y', labelsize=13)
+    ax.set_ylim(min_bottom - 0.02, max_top + 0.01)
+    ax.set_ylabel("IQM score", labelpad=8)
 
     # Grid and spines
-    ax.grid(True, axis="y", color="#E0E0E0", linewidth=0.8, zorder=1)
+    ax.grid(True, axis="y", color="#CCCCCC", linewidth=0.8, zorder=1)
     ax.set_axisbelow(True)
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
 
-    # Legend top right inside plot
+    # Legend below the axis
     all_handles = combo_bar_handles + ([cpsat_handle] if cpsat_handle else []) + baseline_bar_handles
     all_labels = [f"{METHOD_LABELS[m]} ({MODE_LABELS[mo]})" for m, mo in combos] + \
         (["CP-SAT"] if cpsat_handle else []) + \
         [BASELINE_LABELS.get(b, b) for b in baselines]
     ax.legend(all_handles, all_labels,
-              loc="upper right", fontsize=11,
-              frameon=True, framealpha=0.9,
-              edgecolor="#CCCCCC", handlelength=2.0, ncol=2 if not baselines else 3)
+              loc="upper center", bbox_to_anchor=(0.5, -0.12),
+              ncol=legend_ncol, frameon=False, handlelength=2.0)
 
-    # Title
-    ax.set_title(title, fontsize=16, fontweight='bold', pad=12)
-
-    fig.tight_layout()
-    fig.savefig(PLOTS_DIR / out_name, dpi=300, bbox_inches="tight")
+    save_fig(fig, out_stem)
     plt.close(fig)
-    print(f"  Saved {out_name}")
 
 
 def plot_performance_profiles(data: dict, sizes: list[str], size_labels: dict[str, str],
-                              ncols: int, out_name: str, suptitle: str, figsize: tuple[float, float],
-                              suptitle_fontsize: int = 18, legend_fontsize: int = 13,
-                              suptitle_y: float = 1.08, legend_y: float = 1.0,
-                              axlabelsize: int = 13, ticklabelsize: int = 11,
-                              paneltitlesize: int = 14):
+                              ncols: int, out_stem: str, figsize: tuple[float, float]):
     """Performance profiles, one panel per instance size/dataset."""
     tau_list = data["tau_list"]
     n = len(sizes)
     nrows = -(-n // ncols)  # ceil division
     fig, axes = plt.subplots(nrows, ncols, sharey=True, figsize=figsize)
     axes = np.atleast_2d(axes)
-    fig.patch.set_facecolor('white')
 
     # rliable draws its own xlabel/ylabel on every panel at a fixed 'x-large'
     # size; on a multi-row grid that overlaps neighboring panels, so only the
@@ -287,17 +269,17 @@ def plot_performance_profiles(data: dict, sizes: list[str], size_labels: dict[st
             linestyles=linestyles,
             xlabel=r"Normalized Score $\tau$" if row == bottom_row[col] else "",
             ylabel=r"Fraction of runs with score $> \tau$" if col == 0 else "",
-            labelsize=axlabelsize,
-            ticklabelsize=ticklabelsize,
+            labelsize=mpl.rcParams["axes.labelsize"],
+            ticklabelsize=mpl.rcParams["xtick.labelsize"],
             wrect=5,
             hrect=5,
             ax=ax,
         )
-        ax.set_title(size_labels.get(size, size), fontsize=paneltitlesize, fontweight='bold', pad=10)
+        ax.set_title(size_labels.get(size, size), pad=10)
 
         # Horizontal grid lines only, matching the other plots
         ax.grid(False)
-        ax.grid(True, axis='y', color='#E0E0E0', linewidth=0.8, zorder=1)
+        ax.grid(True, axis='y', color='#CCCCCC', linewidth=0.8, zorder=1)
         ax.set_axisbelow(True)
 
         # Remove top and right spines; rliable leaves left/bottom thick and
@@ -309,8 +291,7 @@ def plot_performance_profiles(data: dict, sizes: list[str], size_labels: dict[st
         ax.spines['bottom'].set_linewidth(0.8)
         ax.spines['left'].set_position(('outward', 0))
         ax.spines['bottom'].set_position(('outward', 0))
-        ax.tick_params(axis='both', length=3, width=0.8, labelsize=11)
-        ax.set_facecolor('#F9F9F9')
+        ax.tick_params(axis='both', length=3, width=0.8)
 
         if legend_handles is None:
             legend_handles = []
@@ -323,19 +304,15 @@ def plot_performance_profiles(data: dict, sizes: list[str], size_labels: dict[st
     for idx in range(n, nrows * ncols):
         axes[divmod(idx, ncols)].axis("off")
 
-    fig.suptitle(suptitle, y=suptitle_y, fontsize=suptitle_fontsize, fontweight='bold')
     if legend_handles:
-        fig.legend(handles=legend_handles, loc='upper center',
-                   bbox_to_anchor=(0.5, legend_y), ncol=len(legend_handles),
-                   frameon=True, framealpha=0.9, edgecolor='#CCCCCC', fontsize=legend_fontsize)
+        fig.legend(handles=legend_handles, loc='outside upper center',
+                   ncol=2, frameon=True, framealpha=0.9, edgecolor='#CCCCCC')
 
-    fig.tight_layout()
-    fig.savefig(PLOTS_DIR / out_name, dpi=300, bbox_inches="tight")
+    save_fig(fig, out_stem)
     plt.close(fig)
-    print(f"  Saved {out_name}")
 
 
-def plot_probability_of_improvement(data: dict, out_name: str, title: str,
+def plot_probability_of_improvement(data: dict, out_stem: str,
                                     exclude: set[tuple[str, str]] | None = None):
     """Probability of improvement, one panel per mode, one bar per instance size.
 
@@ -348,9 +325,8 @@ def plot_probability_of_improvement(data: dict, out_name: str, title: str,
     if not modes_with_data:
         return
 
-    fig, axes = plt.subplots(1, len(modes_with_data), figsize=(7 * len(modes_with_data), 5), sharey=True)
+    fig, axes = plt.subplots(1, len(modes_with_data), figsize=(TEXTWIDTH, TEXTWIDTH * 0.40), sharey=True)
     axes = np.atleast_1d(axes)
-    fig.patch.set_facecolor('white')
 
     # Filter excluded (mode, size) pairs and track the overall y-range so the
     # shared y-axis can be sized to fit every remaining error bar.
@@ -386,44 +362,37 @@ def plot_probability_of_improvement(data: dict, out_name: str, title: str,
         err_low = means - np.array(d["lows"])
         err_high = np.array(d["highs"]) - means
 
-        ax.set_facecolor('#F9F9F9')
         x_pos = np.arange(len(sizes_with_data))
 
         ax.bar(x_pos, means, yerr=[err_low, err_high], color=METHOD_COLORS[m1],
                hatch=MODE_HATCHES[mode], edgecolor="white", linewidth=0.6,
-               capsize=5, error_kw={"elinewidth": 1.0, "capthick": 1.0},
+               capsize=0, error_kw={"elinewidth": 1.0, "ecolor": "black"},
                width=0.6, zorder=3, label=label)
         ax.axhline(0.5, linestyle="--", color="black", alpha=0.5, zorder=2, label="No difference")
 
         ax.set_xticks(x_pos)
-        ax.set_xticklabels(sizes_with_data, fontsize=11)
-        ax.set_xlabel("Instance Size", fontsize=12, labelpad=8)
+        ax.set_xticklabels(sizes_with_data)
+        ax.set_xlabel("Instance size", labelpad=8)
         ax.set_ylim(y_lo, y_hi)
-        ax.tick_params(axis='y', labelsize=11)
-        ax.set_title(MODE_LABELS[mode], fontsize=13, fontweight='bold', pad=12)
+        ax.set_title(MODE_LABELS[mode], pad=12)
 
-        ax.grid(True, axis='y', color='#E0E0E0', linewidth=0.8, zorder=1)
+        ax.grid(True, axis='y', color='#CCCCCC', linewidth=0.8, zorder=1)
         ax.set_axisbelow(True)
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
 
         ax.legend(frameon=True, framealpha=0.9, edgecolor='#CCCCCC',
-                  fontsize=10, loc='upper right')
+                  loc='upper right')
 
-    axes[0].set_ylabel(label, fontsize=12, labelpad=8)
-    fig.suptitle(title, fontsize=15, fontweight='bold')
+    axes[0].set_ylabel(label, labelpad=8)
 
-    fig.tight_layout()
-    fig.savefig(PLOTS_DIR / out_name, dpi=300, bbox_inches="tight")
+    save_fig(fig, out_stem)
     plt.close(fig)
-    print(f"  Saved {out_name}")
 
 
 def plot_scaling(data: dict):
     """Plot 5: IQM vs. instance size, one line per method."""
-    fig, ax = plt.subplots(figsize=(10, 6))
-    fig.patch.set_facecolor('white')
-    ax.set_facecolor('#F9F9F9')
+    fig, ax = plt.subplots(figsize=(TEXTWIDTH, TEXTWIDTH * 0.55))
 
     x_labels = TEST_SIZES
     x_pos = np.arange(len(x_labels))
@@ -438,89 +407,66 @@ def plot_scaling(data: dict):
         ax.plot(x_pos, means,
                 label=f"{METHOD_LABELS[method]} ({MODE_LABELS[mode]})",
                 color=METHOD_COLORS[method], linestyle=MODE_LINESTYLES[mode],
-                marker=MODE_MARKERS[mode], linewidth=2.5, zorder=3)
+                marker=MODE_MARKERS[mode], zorder=3)
 
     ax.set_xticks(x_pos)
-    ax.set_xticklabels(x_labels, fontsize=11)
-    ax.set_xlabel("Instance Size", fontsize=12, labelpad=8)
-    ax.set_ylabel("IQM Score (C_CP-SAT / C)", fontsize=12, labelpad=8)
-    ax.tick_params(axis='y', labelsize=11)
-    ax.set_title("Scaling: Performance over Instance Size", fontsize=13, fontweight='bold', pad=12)
+    ax.set_xticklabels(x_labels)
+    ax.set_xlabel("Instance size", labelpad=8)
+    ax.set_ylabel("IQM score", labelpad=8)
 
-    ax.grid(True, axis='y', color='#E0E0E0', linewidth=0.8, zorder=1)
+    ax.grid(True, axis='y', color='#CCCCCC', linewidth=0.8, zorder=1)
+    ax.set_axisbelow(True)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.15),
+              ncol=4, frameon=False)
+
+    save_fig(fig, "05_scaling")
+    plt.close(fig)
+
+
+def plot_efficiency(data: dict):
+    """Plot 7: Runtime efficiency (sampling only). Isolates the per-decision
+    GNN forward-pass time, i.e. just the compute the pooling/no-pooling
+    difference actually touches, with the fixed per-instance overhead (env
+    setup, I/O, sampling-loop bookkeeping) stripped out. Log-scale y (the
+    range spans about two orders of magnitude). The slowdown factor itself is
+    reported in the surrounding text. 200x10 and Hurink are excluded (see
+    EFFICIENCY_SIZES / analyze_efficiency).
+    """
+    sizes = data["sizes"]
+    x_pos = np.arange(len(sizes))
+
+    fig, ax = plt.subplots(figsize=(TEXTWIDTH * 0.7, TEXTWIDTH * 0.5))
+
+    for method in METHODS:
+        d = data["methods"][method]["forward_ms"]
+        mean = np.array(d["mean"])
+        lo = np.array(d["lo"])
+        hi = np.array(d["hi"])
+        color = METHOD_COLORS[method]
+        ax.plot(x_pos, mean, color=color, marker=MODE_MARKERS["sample"],
+                linestyle=MODE_LINESTYLES["sample"],
+                label=METHOD_LABELS[method], zorder=3)
+        ax.fill_between(x_pos, lo, hi, color=color, alpha=0.15, zorder=2)
+
+    ax.set_yscale("log")
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(sizes)
+    ax.set_xlabel("Instance size", labelpad=8)
+    ax.set_ylabel("Forward pass per decision (ms)", labelpad=8)
+
+    ax.grid(True, axis='y', which='both', color='#CCCCCC', linewidth=0.6, zorder=1)
     ax.set_axisbelow(True)
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
 
     ax.legend(frameon=True, framealpha=0.9, edgecolor='#CCCCCC',
-              fontsize=10, loc='center left', bbox_to_anchor=(1.01, 0.5))
+              loc='upper left')
 
-    fig.tight_layout()
-    fig.savefig(PLOTS_DIR / "05_scaling.png", dpi=300, bbox_inches="tight")
+    save_fig(fig, "07_efficiency")
     plt.close(fig)
-    print("  Saved 05_scaling.png")
-
-
-def plot_efficiency(data: dict):
-    """Plot 7: Runtime efficiency (sampling only). Panel 1 is wall-clock
-    solve time per instance -- this includes n_decisions x forward-pass time
-    PLUS a fixed per-instance overhead (env setup, I/O, sampling-loop
-    bookkeeping) that dominates at small sizes and dilutes the pooling
-    effect there. Panel 2 isolates the per-decision GNN forward-pass time,
-    i.e. just the compute the pooling/no-pooling difference actually
-    touches, with the fixed overhead stripped out -- so the same effect
-    shows up earlier and larger. Both log-scale y (the range spans about
-    two orders of magnitude). The slowdown factor itself is reported in the
-    surrounding text rather than a third panel. 200x10 and Hurink are
-    excluded (see EFFICIENCY_SIZES / analyze_efficiency).
-    """
-    sizes = data["sizes"]
-    x_pos = np.arange(len(sizes))
-
-    fig, axes = plt.subplots(1, 2, figsize=(11, 5))
-    fig.patch.set_facecolor('white')
-
-    panels = [
-        (axes[0], "solve_time", "Solve Time per Instance (s)",
-         "Solve Time (Forward Pass + Fixed Overhead)"),
-        (axes[1], "forward_ms", "Forward Pass per Decision (ms)",
-         "Forward Pass Time"),
-    ]
-
-    for ax, field, ylabel, title in panels:
-        ax.set_facecolor('#F9F9F9')
-        for method in METHODS:
-            d = data["methods"][method][field]
-            mean = np.array(d["mean"])
-            lo = np.array(d["lo"])
-            hi = np.array(d["hi"])
-            color = METHOD_COLORS[method]
-            ax.plot(x_pos, mean, color=color, marker=MODE_MARKERS["sample"],
-                    linestyle=MODE_LINESTYLES["sample"], linewidth=2.5,
-                    label=METHOD_LABELS[method], zorder=3)
-            ax.fill_between(x_pos, lo, hi, color=color, alpha=0.15, zorder=2)
-
-        ax.set_yscale("log")
-        ax.set_xticks(x_pos)
-        ax.set_xticklabels(sizes, fontsize=11)
-        ax.set_xlabel("Instance Size", fontsize=12, labelpad=8)
-        ax.set_ylabel(ylabel, fontsize=12, labelpad=8)
-        ax.tick_params(axis='y', labelsize=11)
-        ax.set_title(title, fontsize=13, fontweight='bold', pad=12)
-
-        ax.grid(True, axis='y', which='both', color='#E0E0E0', linewidth=0.6, zorder=1)
-        ax.set_axisbelow(True)
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
-
-        ax.legend(frameon=True, framealpha=0.9, edgecolor='#CCCCCC',
-                  fontsize=10, loc='upper left')
-
-    fig.suptitle("Runtime Efficiency (Sampling)", fontsize=15, fontweight='bold')
-    fig.tight_layout()
-    fig.savefig(PLOTS_DIR / "07_efficiency.png", dpi=300, bbox_inches="tight")
-    plt.close(fig)
-    print("  Saved 07_efficiency.png")
 
 
 def main():
@@ -537,39 +483,33 @@ def main():
         ("01 Training Curves",
          lambda: plot_training_curves(data["training_curves"])),
         ("02 IQM Bars",
-         lambda: plot_iqm_bars(data["iqm_bars"], TEST_SIZES, "02_iqm_bars.png",
-                               "Interquartile Mean with 95% Bootstrap CIs", (16, 7),
+         lambda: plot_iqm_bars(data["iqm_bars"], TEST_SIZES, "02_iqm_bars",
+                               (TEXTWIDTH, TEXTWIDTH * 0.45),
                                exclude={("200x10", "sagc", "sample"), ("200x10", "nopooling", "sample")},
                                baseline_keys=["CPSAT", "BestDR"])),
         ("02b IQM Bars (Hurink)",
-         lambda: plot_iqm_bars(data["iqm_bars_hurink"], HURINK_DATASETS, "02b_iqm_bars_hurink.png",
-                               "Interquartile Mean with 95% Bootstrap CIs (Hurink)", (11, 7),
-                               baseline_keys=["CPSAT", "BestDR"])),
+         lambda: plot_iqm_bars(data["iqm_bars_hurink"], HURINK_DATASETS, "02b_iqm_bars_hurink",
+                               (TEXTWIDTH * 0.7, TEXTWIDTH * 0.50),
+                               baseline_keys=["CPSAT", "BestDR"], legend_ncol=2)),
         ("03 Performance Profiles",
          lambda: plot_performance_profiles(data["performance_profiles"], TEST_SIZES, {}, 3,
-                                           "03_performance_profiles.png",
-                                           "Performance Profiles with 95% Bootstrap Confidence Bands", (13, 12))),
+                                           "03_performance_profiles",
+                                           (TEXTWIDTH, TEXTWIDTH * 0.95))),
         ("03b Performance Profiles (Hurink)",
          lambda: plot_performance_profiles(data["performance_profiles_hurink"], HURINK_DATASETS, HURINK_LABELS, 3,
-                                           "03b_performance_profiles_hurink.png",
-                                           "Performance Profiles with 95% Bootstrap Confidence Bands (Hurink)", (13, 5))),
+                                           "03b_performance_profiles_hurink",
+                                           (TEXTWIDTH, TEXTWIDTH * 0.40))),
         ("03c Performance Profiles (10x5)",
          lambda: plot_performance_profiles(data["performance_profiles"], ["10x5"], {}, 1,
-                                           "03c_performance_profiles_10x5.png",
-                                           "Performance Profile with 95% Bootstrap Confidence Bands (10x5)", (5, 5),
-                                           suptitle_fontsize=11, legend_fontsize=8,
-                                           suptitle_y=1.08, legend_y=1.0,
-                                           axlabelsize=9, ticklabelsize=8,
-                                           paneltitlesize=10)),
+                                           "03c_performance_profiles_10x5",
+                                           (TEXTWIDTH * 0.6, TEXTWIDTH * 0.6))),
         ("04 Probability of Improvement",
          lambda: plot_probability_of_improvement(data["probability_of_improvement"],
-                                                  "04_probability_of_improvement.png",
-                                                  "Probability of Improvement",
+                                                  "04_probability_of_improvement",
                                                   exclude={("sample", "200x10")})),
         ("04b Probability of Improvement (Hurink)",
          lambda: plot_probability_of_improvement(data["probability_of_improvement_hurink"],
-                                                  "04b_probability_of_improvement_hurink.png",
-                                                  "Probability of Improvement (Hurink)")),
+                                                  "04b_probability_of_improvement_hurink")),
         ("05 Scaling",
          lambda: plot_scaling(data["scaling"])),
         ("07 Efficiency",

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import matplotlib as mpl
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 RESULTS_DIR = SCRIPT_DIR.parent       # results/
 BENCHMARKS_DIR = RESULTS_DIR / "benchmarks"
@@ -15,7 +17,7 @@ ANALYSIS_CACHE = SCRIPT_DIR / "analysis_cache.pkl"
 
 # Method names (folder name without "_20x10" and without ".pt")
 METHODS = ["sagc", "nopooling"]
-METHOD_LABELS = {"sagc": "SAGC", "nopooling": "NoPooling"}
+METHOD_LABELS = {"sagc": "Song+SAGC", "nopooling": "Song"}
 # Cool hues, deliberately far from the warm DR family below so the two groups
 # never get confused. Only 2 of these are used for now, leaving standard
 # tab10-ish colors (green, orange, plain red, ...) free for future methods.
@@ -85,6 +87,29 @@ BASELINE_LABELS = {
 
 # rliable bootstrap replications
 BOOTSTRAP_REPS = 5000  # 50000 is standard, 5000 is enough for the pilot test
+
+# Textbreite der Arbeit in Zoll
+TEXTWIDTH = 425 / 72.27
+
+
+def set_thesis_style() -> None:
+    """Set mpl.rcParams so figures match the thesis's LaTeX typesetting."""
+    mpl.rcParams.update({
+        "font.family": "serif",
+        "mathtext.fontset": "cm",
+        "font.size": 9,
+        "axes.labelsize": 9,
+        "axes.titlesize": 9,
+        "xtick.labelsize": 8,
+        "ytick.labelsize": 8,
+        "legend.fontsize": 8,
+        "lines.linewidth": 1.4,
+        "axes.linewidth": 0.6,
+        "grid.linewidth": 0.5,
+        "figure.constrained_layout.use": True,
+        "savefig.format": "pdf",
+        "axes.formatter.use_mathtext": True,
+    })
 
 
 def combo_key(method: str, mode: str) -> str:
