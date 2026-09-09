@@ -34,6 +34,7 @@ from common import (
     MACHINE_SWEEP_SIZES,
     METHOD_DIRS,
     METHOD_LABELS,
+    METHOD_USES_SPLIT,
     METHODS,
     MODE_LABELS,
     MODES,
@@ -70,7 +71,8 @@ def load_drl_test_makespans(method: str, size: str, seed: int, mode: str, split:
         Dict {instance_name: makespan} or None if the file is missing.
     """
     folder_size = SIZE_FOLDER_MAP[size]
-    folder = SCRIPT_DIR / METHOD_DIRS[method] / "test" / f"seed{seed}" / f"{folder_size}_{mode}_{split}"
+    folder_name = f"{folder_size}_{mode}_{split}" if METHOD_USES_SPLIT[method] else f"{folder_size}_{mode}"
+    folder = SCRIPT_DIR / METHOD_DIRS[method] / "test" / f"seed{seed}" / folder_name
     excel = _find_excel(folder, "test_results_*.xlsx")
     if excel is None:
         return None
@@ -84,7 +86,8 @@ def load_drl_test_makespans(method: str, size: str, seed: int, mode: str, split:
 def load_drl_overhead(method: str, size: str, seed: int, mode: str, split: str) -> pd.DataFrame | None:
     """Loads coarsening_overhead sheet."""
     folder_size = SIZE_FOLDER_MAP[size]
-    folder = SCRIPT_DIR / METHOD_DIRS[method] / "test" / f"seed{seed}" / f"{folder_size}_{mode}_{split}"
+    folder_name = f"{folder_size}_{mode}_{split}" if METHOD_USES_SPLIT[method] else f"{folder_size}_{mode}"
+    folder = SCRIPT_DIR / METHOD_DIRS[method] / "test" / f"seed{seed}" / folder_name
     excel = _find_excel(folder, "test_results_*.xlsx")
     if excel is None:
         return None
@@ -111,7 +114,8 @@ def load_drl_training_curve(method: str, seed: int) -> pd.DataFrame | None:
 def load_drl_solve_times(method: str, size: str, seed: int, mode: str, split: str) -> np.ndarray | None:
     """Loads per-instance solve_time (wall-clock seconds)."""
     folder_size = SIZE_FOLDER_MAP[size]
-    folder = SCRIPT_DIR / METHOD_DIRS[method] / "test" / f"seed{seed}" / f"{folder_size}_{mode}_{split}"
+    folder_name = f"{folder_size}_{mode}_{split}" if METHOD_USES_SPLIT[method] else f"{folder_size}_{mode}"
+    folder = SCRIPT_DIR / METHOD_DIRS[method] / "test" / f"seed{seed}" / folder_name
     excel = _find_excel(folder, "test_results_*.xlsx")
     if excel is None:
         return None
@@ -238,10 +242,14 @@ def analyze_training_curves(split: str) -> dict:
     Uses the '{split}_norm' column (makespan normalized by MWR, lower is
     better) -- a different normalization than the C_best-based score used
     everywhere else, since this is what was logged during training.
+
+    Restricted to the two multi-size series (sagc, nopooling) -- sagc_20x10
+    comes from a different training run whose validation curve uses a
+    different normalization, so its curve wouldn't be comparable here.
     """
     column = f"{split}_norm"
     result = {}
-    for method in METHODS:
+    for method in ["sagc", "nopooling"]:
         curves = []
         for s in SEEDS:
             df = load_drl_training_curve(method, s)
@@ -299,109 +307,6 @@ def analyze_iqm_bars(score_dict_per_size: dict[str, dict[str, np.ndarray]],
     return result
 
 
-def analyze_performance_profiles(score_dict_per_size: dict[str, dict[str, np.ndarray]],
-                                 sizes: list[str]) -> dict:
-    """Bootstraps performance profiles (score distribution over tau) per size."""
-    tau_list = np.linspace(0.75, 1.05, 50)
-    result = {"tau_list": tau_list, "sizes": {}}
-    n = len(sizes)
-
-    for si, size in enumerate(sizes):
-        score_dict = score_dict_per_size.get(size, {})
-        if not score_dict:
-            result["sizes"][size] = None
-            continue
-
-        print(f"    bootstrap {size} ({si+1}/{n}) ...", end=" ", flush=True)
-        t0 = time.time()
-        score_distr, score_distr_cis = rly.create_performance_profile(
-            score_dict, tau_list, reps=BOOTSTRAP_REPS
-        )
-        print(f"{time.time()-t0:.1f}s")
-
-        result["sizes"][size] = {"score_distr": score_distr, "score_distr_cis": score_distr_cis}
-
-    return result
-
-
-def analyze_probability_of_improvement(score_dict_per_size: dict[str, dict[str, np.ndarray]],
-                                       sizes: list[str]) -> dict:
-    """Bootstraps P(method1 > method2), one value per instance size, per mode."""
-    if len(METHODS) < 2:
-        return {}
-    m1, m2 = METHODS[0], METHODS[1]
-
-    result = {}
-    for mode in MODES:
-        key = f"{m1}_gt_{m2}"
-        k1, k2 = combo_key(m1, mode), combo_key(m2, mode)
-        means, lows, highs, sizes_with_data = [], [], [], []
-
-        for si, size in enumerate(sizes):
-            sd = score_dict_per_size.get(size, {})
-            if k1 not in sd or k2 not in sd:
-                continue
-            print(f"    bootstrap {size} {mode} ({si+1}/{len(sizes)}) ...", end=" ", flush=True)
-            t0 = time.time()
-            pair_dict = {key: (sd[k1], sd[k2])}
-            poi, poi_cis = rly.get_interval_estimates(
-                pair_dict, metrics.probability_of_improvement, reps=BOOTSTRAP_REPS
-            )
-            print(f"{time.time()-t0:.1f}s")
-            means.append(float(np.squeeze(poi[key])))
-            ci = poi_cis[key]
-            lows.append(float(np.squeeze(ci[0])))
-            highs.append(float(np.squeeze(ci[1])))
-            sizes_with_data.append(size)
-
-        result[mode] = {"m1": m1, "m2": m2, "sizes": sizes_with_data,
-                        "means": means, "lows": lows, "highs": highs}
-
-    return result
-
-
-def analyze_scaling(score_dict_per_size: dict[str, dict[str, np.ndarray]],
-                    baseline_scores_per_size: dict[str, dict[str, np.ndarray]],
-                    sizes: list[str]) -> dict:
-    """Bootstraps IQM vs. instance size, one series per (method, mode); plus baseline points."""
-    iqm_fn = lambda x: np.array([metrics.aggregate_iqm(x)])
-
-    combos = [combo_key(method, mode) for method in METHODS for mode in MODES]
-    methods_result = {}
-    total_bs = len(combos) * len(sizes)
-    bs_i = 0
-    for key in combos:
-        means, lows, highs = [], [], []
-        for size in sizes:
-            sd = score_dict_per_size.get(size, {})
-            bs_i += 1
-            if key not in sd:
-                means.append(np.nan)
-                lows.append(np.nan)
-                highs.append(np.nan)
-                continue
-            print(f"    bootstrap {key} {size} ({bs_i}/{total_bs}) ...", end=" ", flush=True)
-            t0 = time.time()
-            single = {key: sd[key]}
-            iqm_scores, iqm_cis = rly.get_interval_estimates(single, iqm_fn, reps=BOOTSTRAP_REPS)
-            print(f"{time.time()-t0:.1f}s")
-            means.append(float(iqm_scores[key][0]))
-            lows.append(float(iqm_cis[key][0, 0]))
-            highs.append(float(iqm_cis[key][1, 0]))
-        methods_result[key] = {"means": means, "lows": lows, "highs": highs}
-
-    baselines_result = {}
-    for b in BASELINES:
-        means = []
-        for size in sizes:
-            arr = baseline_scores_per_size.get(size, {}).get(b)
-            means.append(np.nan if arr is None or arr.size == 0 else float(metrics.aggregate_iqm(arr)))
-        if not all(np.isnan(means)):
-            baselines_result[b] = means
-
-    return {"methods": methods_result, "baselines": baselines_result}
-
-
 def analyze_efficiency(sizes: list[str], split: str) -> dict:
     """Solve time and per-decision forward-pass time vs. instance size,
     sampling mode only (Hurink excluded -- ran on different hardware).
@@ -409,9 +314,12 @@ def analyze_efficiency(sizes: list[str], split: str) -> dict:
     Mean across seeds, with a min/max band, per method. Coarsening overhead
     itself (avg_coarse_ms) is negligible for both methods and isn't part of
     the headline story, so it's left out.
+
+    Restricted to the two multi-size series (sagc, nopooling) -- runtime
+    isn't a topic for the 20x10-trained checkpoint.
     """
     result = {"sizes": sizes, "methods": {}}
-    for method in METHODS:
+    for method in ["sagc", "nopooling"]:
         solve_mean, solve_lo, solve_hi = [], [], []
         fwd_mean, fwd_lo, fwd_hi = [], [], []
         for size in sizes:
@@ -591,11 +499,6 @@ def run_pipeline(split: str):
         ("IQM Bars Jobs (bootstrap)",                     lambda: analyze_iqm_bars(score_dict_per_size, baseline_scores_per_size, JOB_SWEEP_SIZES), "iqm_bars_jobs"),
         ("IQM Bars Machines (bootstrap)",                 lambda: analyze_iqm_bars(score_dict_per_size, baseline_scores_per_size, MACHINE_SWEEP_SIZES), "iqm_bars_machines"),
         ("IQM Bars Hurink (bootstrap)",                   lambda: analyze_iqm_bars(score_dict_per_size, baseline_scores_per_size, HURINK_DATASETS), "iqm_bars_hurink"),
-        ("Performance Profiles (bootstrap)",              lambda: analyze_performance_profiles(score_dict_per_size, TEST_SIZES), "performance_profiles"),
-        ("Performance Profiles Hurink (bootstrap)",       lambda: analyze_performance_profiles(score_dict_per_size, HURINK_DATASETS), "performance_profiles_hurink"),
-        ("Probability of Improvement (bootstrap)",        lambda: analyze_probability_of_improvement(score_dict_per_size, TEST_SIZES), "probability_of_improvement"),
-        ("Probability of Improvement Hurink (bootstrap)", lambda: analyze_probability_of_improvement(score_dict_per_size, HURINK_DATASETS), "probability_of_improvement_hurink"),
-        ("Scaling (bootstrap)",                           lambda: analyze_scaling(score_dict_per_size, baseline_scores_per_size, TEST_SIZES), "scaling"),
         ("Efficiency (solve time / forward time)",        lambda: analyze_efficiency(EFFICIENCY_SIZES, split), "efficiency"),
     ]
 

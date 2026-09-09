@@ -20,6 +20,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import matplotlib as mpl
+
 SCRIPT_DIR = Path(__file__).resolve().parent
 RESULTS_DIR = SCRIPT_DIR.parent       # results/
 BENCHMARKS_DIR = RESULTS_DIR / "benchmarks"
@@ -28,12 +30,21 @@ PLOTS_DIR.mkdir(exist_ok=True)
 
 # Method names, and the on-disk folder for each (folder holds seed{n}/ for
 # training and seed{n}/test/... for testing).
-METHODS = ["sagc", "nopooling"]
-METHOD_LABELS = {"sagc": "SAGC", "nopooling": "NoPooling"}
-METHOD_DIRS = {"sagc": "multi_size_training_sagc", "nopooling": "multi_size_training_nopooling"}
+METHODS = ["sagc", "nopooling", "sagc_20x10"]
+METHOD_LABELS = {"sagc": "Song+SAGC (multi size)", "nopooling": "Song (multi size)",
+                 "sagc_20x10": "Song+SAGC (20x10)"}
+METHOD_DIRS = {"sagc": "multi_size_training_sagc", "nopooling": "multi_size_training_nopooling",
+               "sagc_20x10": "song_sagc_20x10"}
 # Cool hues, deliberately far from the warm DR family below so the two groups
-# never get confused.
-METHOD_COLORS = {"sagc": "#4C72B0", "nopooling": "#DD8452"}
+# never get confused. Dark blue is reserved for Song+SAGC (20x10), matching
+# the color it already has in the other experiments; sagc (multi size) gets
+# the lighter blue so it still reads as the same method.
+METHOD_COLORS = {"sagc": "#9DB8DA", "nopooling": "#DD8452", "sagc_20x10": "#4C72B0"}
+
+# Whether each method's test folder has a checkpoint-selection split suffix
+# (e.g. "_indist"/"_ood") in its name. sagc_20x10 was trained with a single
+# validation set, so its test folders have no split suffix.
+METHOD_USES_SPLIT = {"sagc": True, "nopooling": True, "sagc_20x10": False}
 
 # Seeds, 3 for the pilot
 SEEDS = [0, 1, 2]
@@ -121,6 +132,29 @@ BASELINE_LABELS = {
 
 # rliable bootstrap replications
 BOOTSTRAP_REPS = 5000  # 50000 is standard, 5000+ for real numbers, 100 while iterating
+
+# Textbreite der Arbeit in Zoll
+TEXTWIDTH = 425 / 72.27
+
+
+def set_thesis_style() -> None:
+    """Set mpl.rcParams so figures match the thesis's LaTeX typesetting."""
+    mpl.rcParams.update({
+        "font.family": "serif",
+        "mathtext.fontset": "cm",
+        "font.size": 9,
+        "axes.labelsize": 9,
+        "axes.titlesize": 9,
+        "xtick.labelsize": 8,
+        "ytick.labelsize": 8,
+        "legend.fontsize": 8,
+        "lines.linewidth": 1.4,
+        "axes.linewidth": 0.6,
+        "grid.linewidth": 0.5,
+        "figure.constrained_layout.use": True,
+        "savefig.format": "pdf",
+        "axes.formatter.use_mathtext": True,
+    })
 
 
 def combo_key(method: str, mode: str) -> str:
