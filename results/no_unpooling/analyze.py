@@ -278,67 +278,6 @@ def analyze_iqm_bars(score_dict_per_size: dict[str, dict[str, np.ndarray]],
     return result
 
 
-def analyze_performance_profiles(score_dict_per_size: dict[str, dict[str, np.ndarray]],
-                                 sizes: list[str]) -> dict:
-    """Bootstraps performance profiles (score distribution over tau) per size."""
-    tau_list = np.linspace(0.75, 1.05, 50)
-    result = {"tau_list": tau_list, "sizes": {}}
-    n = len(sizes)
-
-    for si, size in enumerate(sizes):
-        score_dict = score_dict_per_size.get(size, {})
-        if not score_dict:
-            result["sizes"][size] = None
-            continue
-
-        print(f"    bootstrap {size} ({si+1}/{n}) ...", end=" ", flush=True)
-        t0 = time.time()
-        score_distr, score_distr_cis = rly.create_performance_profile(
-            score_dict, tau_list, reps=BOOTSTRAP_REPS
-        )
-        print(f"{time.time()-t0:.1f}s")
-
-        result["sizes"][size] = {"score_distr": score_distr, "score_distr_cis": score_distr_cis}
-
-    return result
-
-
-def analyze_probability_of_improvement(score_dict_per_size: dict[str, dict[str, np.ndarray]],
-                                       sizes: list[str]) -> dict:
-    """Bootstraps P(method1 > method2), one value per instance size, per mode."""
-    if len(METHODS) < 2:
-        return {}
-    m1, m2 = METHODS[0], METHODS[1]
-
-    result = {}
-    for mode in MODES:
-        key = f"{m1}_gt_{m2}"
-        k1, k2 = combo_key(m1, mode), combo_key(m2, mode)
-        means, lows, highs, sizes_with_data = [], [], [], []
-
-        for si, size in enumerate(sizes):
-            sd = score_dict_per_size.get(size, {})
-            if k1 not in sd or k2 not in sd:
-                continue
-            print(f"    bootstrap {size} {mode} ({si+1}/{len(sizes)}) ...", end=" ", flush=True)
-            t0 = time.time()
-            pair_dict = {key: (sd[k1], sd[k2])}
-            poi, poi_cis = rly.get_interval_estimates(
-                pair_dict, metrics.probability_of_improvement, reps=BOOTSTRAP_REPS
-            )
-            print(f"{time.time()-t0:.1f}s")
-            means.append(float(np.squeeze(poi[key])))
-            ci = poi_cis[key]
-            lows.append(float(np.squeeze(ci[0])))
-            highs.append(float(np.squeeze(ci[1])))
-            sizes_with_data.append(size)
-
-        result[mode] = {"m1": m1, "m2": m2, "sizes": sizes_with_data,
-                        "means": means, "lows": lows, "highs": highs}
-
-    return result
-
-
 def analyze_scaling(score_dict_per_size: dict[str, dict[str, np.ndarray]],
                     baseline_scores_per_size: dict[str, dict[str, np.ndarray]],
                     sizes: list[str]) -> dict:
@@ -382,49 +321,55 @@ def analyze_scaling(score_dict_per_size: dict[str, dict[str, np.ndarray]],
 
 
 def analyze_efficiency(sizes: list[str]) -> dict:
-    """Solve time and per-decision forward-pass time vs. instance size,
-    sampling mode only (Hurink excluded -- ran on different hardware).
+    """Solve time and per-decision forward-pass time vs. instance size, per
+    method and inference mode (Hurink excluded -- ran on different hardware).
 
-    Mean across seeds, with a min/max band, per method. Coarsening overhead
-    itself (avg_coarse_ms) is negligible for both methods and isn't part of
-    the headline story, so it's left out.
+    Mean across seeds, with a min/max band. Coarsening overhead itself
+    (avg_coarse_ms) is negligible for both methods and isn't part of the
+    headline story, so it's left out.
+
+    Keyed by combo_key(method, mode) so greedy and sampling can be drawn as
+    separate series; the per-decision forward pass should be mode-independent
+    (same network, same graph), so having both in the plot is what makes that
+    visible rather than assumed.
     """
     result = {"sizes": sizes, "methods": {}}
     for method in METHODS:
-        solve_mean, solve_lo, solve_hi = [], [], []
-        fwd_mean, fwd_lo, fwd_hi = [], [], []
-        for size in sizes:
-            solve_per_seed, fwd_per_seed = [], []
-            for s in SEEDS:
-                st = load_drl_solve_times(method, size, s, "sample")
-                ov = load_drl_overhead(method, size, s, "sample")
-                if st is not None and st.size:
-                    solve_per_seed.append(st.mean())
-                if ov is not None and not ov.empty:
-                    fwd_per_seed.append(ov["avg_forward_ms"].astype(float).mean())
+        for mode in MODES:
+            solve_mean, solve_lo, solve_hi = [], [], []
+            fwd_mean, fwd_lo, fwd_hi = [], [], []
+            for size in sizes:
+                solve_per_seed, fwd_per_seed = [], []
+                for s in SEEDS:
+                    st = load_drl_solve_times(method, size, s, mode)
+                    ov = load_drl_overhead(method, size, s, mode)
+                    if st is not None and st.size:
+                        solve_per_seed.append(st.mean())
+                    if ov is not None and not ov.empty:
+                        fwd_per_seed.append(ov["avg_forward_ms"].astype(float).mean())
 
-            if solve_per_seed:
-                solve_mean.append(float(np.mean(solve_per_seed)))
-                solve_lo.append(float(np.min(solve_per_seed)))
-                solve_hi.append(float(np.max(solve_per_seed)))
-            else:
-                solve_mean.append(np.nan)
-                solve_lo.append(np.nan)
-                solve_hi.append(np.nan)
+                if solve_per_seed:
+                    solve_mean.append(float(np.mean(solve_per_seed)))
+                    solve_lo.append(float(np.min(solve_per_seed)))
+                    solve_hi.append(float(np.max(solve_per_seed)))
+                else:
+                    solve_mean.append(np.nan)
+                    solve_lo.append(np.nan)
+                    solve_hi.append(np.nan)
 
-            if fwd_per_seed:
-                fwd_mean.append(float(np.mean(fwd_per_seed)))
-                fwd_lo.append(float(np.min(fwd_per_seed)))
-                fwd_hi.append(float(np.max(fwd_per_seed)))
-            else:
-                fwd_mean.append(np.nan)
-                fwd_lo.append(np.nan)
-                fwd_hi.append(np.nan)
+                if fwd_per_seed:
+                    fwd_mean.append(float(np.mean(fwd_per_seed)))
+                    fwd_lo.append(float(np.min(fwd_per_seed)))
+                    fwd_hi.append(float(np.max(fwd_per_seed)))
+                else:
+                    fwd_mean.append(np.nan)
+                    fwd_lo.append(np.nan)
+                    fwd_hi.append(np.nan)
 
-        result["methods"][method] = {
-            "solve_time": {"mean": solve_mean, "lo": solve_lo, "hi": solve_hi},
-            "forward_ms": {"mean": fwd_mean, "lo": fwd_lo, "hi": fwd_hi},
-        }
+            result["methods"][combo_key(method, mode)] = {
+                "solve_time": {"mean": solve_mean, "lo": solve_lo, "hi": solve_hi},
+                "forward_ms": {"mean": fwd_mean, "lo": fwd_lo, "hi": fwd_hi},
+            }
     return result
 
 
@@ -574,10 +519,6 @@ def main():
         ("Training Curves (aggregate)",                  analyze_training_curves, "training_curves"),
         ("IQM Bars (bootstrap)",                          lambda: analyze_iqm_bars(score_dict_per_size, baseline_scores_per_size, TEST_SIZES), "iqm_bars"),
         ("IQM Bars Hurink (bootstrap)",                   lambda: analyze_iqm_bars(score_dict_per_size, baseline_scores_per_size, HURINK_DATASETS), "iqm_bars_hurink"),
-        ("Performance Profiles (bootstrap)",              lambda: analyze_performance_profiles(score_dict_per_size, TEST_SIZES), "performance_profiles"),
-        ("Performance Profiles Hurink (bootstrap)",       lambda: analyze_performance_profiles(score_dict_per_size, HURINK_DATASETS), "performance_profiles_hurink"),
-        ("Probability of Improvement (bootstrap)",        lambda: analyze_probability_of_improvement(score_dict_per_size, TEST_SIZES), "probability_of_improvement"),
-        ("Probability of Improvement Hurink (bootstrap)", lambda: analyze_probability_of_improvement(score_dict_per_size, HURINK_DATASETS), "probability_of_improvement_hurink"),
         ("Scaling (bootstrap)",                           lambda: analyze_scaling(score_dict_per_size, baseline_scores_per_size, TEST_SIZES), "scaling"),
         ("Efficiency (solve time / forward time)",        lambda: analyze_efficiency(EFFICIENCY_SIZES), "efficiency"),
     ]

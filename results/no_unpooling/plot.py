@@ -9,18 +9,14 @@ from __future__ import annotations
 import pickle
 
 import numpy as np
-import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
-
-from rliable import plot_utils
 
 from common import (
     ANALYSIS_CACHE,
     BASELINE_COLORS,
     BASELINE_LABELS,
     HURINK_DATASETS,
-    HURINK_LABELS,
     METHOD_COLORS,
     METHOD_LABELS,
     METHODS,
@@ -28,7 +24,6 @@ from common import (
     MODE_LABELS,
     MODE_LINESTYLES,
     MODE_MARKERS,
-    MODES,
     PLOTS_DIR,
     TEST_SIZES,
     TEXTWIDTH,
@@ -38,6 +33,10 @@ from common import (
 )
 
 set_thesis_style()
+
+# Sample-then-greedy, used for bar order and for the order of the two mode
+# entries within a method's legend column, so every figure lists them alike.
+MODE_ORDER = ["sample", "greedy"]
 
 
 def load_analysis() -> dict:
@@ -56,9 +55,47 @@ def save_fig(fig, stem: str) -> None:
     print(f"  Saved {name}.pdf / .png")
 
 
+def legend_below(fig, columns: list[list]) -> None:
+    """Place a legend underneath the figure, one list of entries per column.
+
+    `columns` is a list of columns, each a list of (handle, label) pairs --
+    so entries that belong together (e.g. both modes of one method) sit above
+    each other in the same column instead of being spread across a row.
+    Matplotlib fills a multi-column legend top-to-bottom within a column, so
+    the columns just get concatenated; shorter ones are padded with invisible
+    entries to keep every column the same height (otherwise matplotlib
+    redistributes the entries and the grouping breaks).
+
+    Drawn as a figure legend with an "outside" location so constrained_layout
+    reserves room for it below the x-label, instead of it landing on top of
+    the axis labels at some hand-tuned offset.
+    """
+    columns = [c for c in columns if c]
+    if not columns:
+        return
+    nrow = max(len(c) for c in columns)
+
+    handles, labels = [], []
+    for col in columns:
+        padded = col + [(plt.Line2D([], [], linestyle="none"), "")] * (nrow - len(col))
+        handles.extend(h for h, _ in padded)
+        labels.extend(lbl for _, lbl in padded)
+
+    fig.legend(handles, labels, loc="outside lower center",
+               ncol=len(columns), frameon=False, handlelength=2.0)
+
+
+def chunked(entries: list, height: int) -> list[list]:
+    """Split a flat list of legend entries into columns of at most `height`,
+    so a long group (e.g. the baselines) doesn't stretch the legend into one
+    tall column."""
+    return [entries[i:i + height] for i in range(0, len(entries), height)]
+
+
 def plot_training_curves(data: dict):
     fig, ax = plt.subplots(figsize=(TEXTWIDTH, TEXTWIDTH * 0.45))
 
+    legend_columns = []
     for method in METHODS:
         curve = data.get(method)
         if curve is None:
@@ -66,10 +103,11 @@ def plot_training_curves(data: dict):
 
         color = METHOD_COLORS[method]
         label = METHOD_LABELS[method]
-        ax.plot(curve["env_steps"], curve["mean"],
-                color=color, label=label, zorder=3)
+        line, = ax.plot(curve["env_steps"], curve["mean"],
+                        color=color, label=label, zorder=3)
         ax.fill_between(curve["env_steps"], curve["lo"], curve["hi"],
                         color=color, alpha=0.15, zorder=2)
+        legend_columns.append([(line, label)])
 
     # Axis labels
     ax.set_xlabel(r"Environment steps ($\times 10^6$)", labelpad=8)
@@ -92,9 +130,8 @@ def plot_training_curves(data: dict):
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
 
-    # Legend
-    ax.legend(frameon=True, framealpha=0.9, edgecolor='#CCCCCC',
-              loc='upper right')
+    # Legend below the axis, one method per column
+    legend_below(fig, legend_columns)
 
     save_fig(fig, "01_training_curves")
     plt.close(fig)
@@ -115,10 +152,13 @@ def plot_iqm_bars(data: dict, sizes: list[str], out_stem: str, figsize: tuple[fl
     and error bar left out, not just zeroed) -- e.g. sampling runs that used
     a reduced instance count and would otherwise be misleadingly compared
     against the full-instance-count runs at other sizes.
+
+    `legend_ncol` is the width budget for the legend below the axis: with
+    room for more columns than there are methods the baselines get a column
+    of their own, otherwise they are stacked underneath the method columns.
     """
     exclude = exclude or set()
-    mode_order = ["sample", "greedy"]
-    combos = [(method, mode) for mode in mode_order for method in METHODS]
+    combos = [(method, mode) for mode in MODE_ORDER for method in METHODS]
     baseline_keys = baseline_keys or []
     # CP-SAT is the normalization anchor (score = C_cpsat / C), so its own
     # score is trivially ~1 everywhere -- shown as a reference line instead
@@ -216,175 +256,25 @@ def plot_iqm_bars(data: dict, sizes: list[str], out_stem: str, figsize: tuple[fl
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
 
-    # Legend below the axis
-    all_handles = combo_bar_handles + ([cpsat_handle] if cpsat_handle else []) + baseline_bar_handles
-    all_labels = [f"{METHOD_LABELS[m]} ({MODE_LABELS[mo]})" for m, mo in combos] + \
-        (["CP-SAT"] if cpsat_handle else []) + \
-        [BASELINE_LABELS.get(b, b) for b in baselines]
-    ax.legend(all_handles, all_labels,
-              loc="upper center", bbox_to_anchor=(0.5, -0.12),
-              ncol=legend_ncol, frameon=False, handlelength=2.0)
-
-    save_fig(fig, out_stem)
-    plt.close(fig)
-
-
-def plot_performance_profiles(data: dict, sizes: list[str], size_labels: dict[str, str],
-                              ncols: int, out_stem: str, figsize: tuple[float, float]):
-    """Performance profiles, one panel per instance size/dataset."""
-    tau_list = data["tau_list"]
-    n = len(sizes)
-    nrows = -(-n // ncols)  # ceil division
-    fig, axes = plt.subplots(nrows, ncols, sharey=True, figsize=figsize)
-    axes = np.atleast_2d(axes)
-
-    # rliable draws its own xlabel/ylabel on every panel at a fixed 'x-large'
-    # size; on a multi-row grid that overlaps neighboring panels, so only the
-    # bottom-most panel per column (last row may be partial) and the leftmost
-    # column get a real label -- everything else gets an empty one.
-    bottom_row = {}
-    for idx in range(n):
-        row, col = divmod(idx, ncols)
-        bottom_row[col] = row
-
-    legend_handles = None
-    for idx, size in enumerate(sizes):
-        row, col = divmod(idx, ncols)
-        ax = axes[row, col]
-        entry = data["sizes"].get(size)
-        if not entry:
-            ax.set_title(f"{size_labels.get(size, size)} (no data)")
-            continue
-
-        score_distr = entry["score_distr"]
-        colors, linestyles = {}, {}
-        for key in score_distr:
-            method, mode = split_combo_key(key)
-            colors[key] = METHOD_COLORS[method]
-            linestyles[key] = MODE_LINESTYLES[mode]
-        plot_utils.plot_performance_profiles(
-            score_distr, tau_list,
-            performance_profile_cis=entry["score_distr_cis"],
-            colors=colors,
-            linestyles=linestyles,
-            xlabel=r"Normalized Score $\tau$" if row == bottom_row[col] else "",
-            ylabel=r"Fraction of runs with score $> \tau$" if col == 0 else "",
-            labelsize=mpl.rcParams["axes.labelsize"],
-            ticklabelsize=mpl.rcParams["xtick.labelsize"],
-            wrect=5,
-            hrect=5,
-            ax=ax,
-        )
-        ax.set_title(size_labels.get(size, size), pad=10)
-
-        # Horizontal grid lines only, matching the other plots
-        ax.grid(False)
-        ax.grid(True, axis='y', color='#CCCCCC', linewidth=0.8, zorder=1)
-        ax.set_axisbelow(True)
-
-        # Remove top and right spines; rliable leaves left/bottom thick and
-        # pushed outward, which reads as a heavy black bar at this figsize --
-        # thin them back down and pull them back to the axis.
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
-        ax.spines['left'].set_linewidth(0.8)
-        ax.spines['bottom'].set_linewidth(0.8)
-        ax.spines['left'].set_position(('outward', 0))
-        ax.spines['bottom'].set_position(('outward', 0))
-        ax.tick_params(axis='both', length=3, width=0.8)
-
-        if legend_handles is None:
-            legend_handles = []
-            for key in score_distr:
-                method, mode = split_combo_key(key)
-                legend_handles.append(plt.Line2D(
-                    [0], [0], color=METHOD_COLORS[method], linestyle=MODE_LINESTYLES[mode],
-                    lw=2.5, label=f"{METHOD_LABELS[method]} ({MODE_LABELS[mode]})"))
-
-    for idx in range(n, nrows * ncols):
-        axes[divmod(idx, ncols)].axis("off")
-
-    if legend_handles:
-        fig.legend(handles=legend_handles, loc='outside upper center',
-                   ncol=2, frameon=True, framealpha=0.9, edgecolor='#CCCCCC')
-
-    save_fig(fig, out_stem)
-    plt.close(fig)
-
-
-def plot_probability_of_improvement(data: dict, out_stem: str,
-                                    exclude: set[tuple[str, str]] | None = None):
-    """Probability of improvement, one panel per mode, one bar per instance size.
-
-    `exclude` is a set of (mode, size) pairs to drop before plotting -- e.g.
-    sampling runs at a size that used a reduced instance count and would
-    otherwise be misleadingly compared against the other sizes/modes.
-    """
-    exclude = exclude or set()
-    modes_with_data = [mo for mo in MODES if data.get(mo) and data[mo].get("sizes")]
-    if not modes_with_data:
-        return
-
-    fig, axes = plt.subplots(1, len(modes_with_data), figsize=(TEXTWIDTH, TEXTWIDTH * 0.40), sharey=True)
-    axes = np.atleast_1d(axes)
-
-    # Filter excluded (mode, size) pairs and track the overall y-range so the
-    # shared y-axis can be sized to fit every remaining error bar.
-    filtered = {}
-    y_min, y_max = 0.5, 0.5
-    for mode in modes_with_data:
-        d = data[mode]
-        sizes_with_data, means, lows, highs = [], [], [], []
-        for size, mean, lo, hi in zip(d["sizes"], d["means"], d["lows"], d["highs"]):
-            if (mode, size) in exclude:
-                continue
-            sizes_with_data.append(size)
-            means.append(mean)
-            lows.append(lo)
-            highs.append(hi)
-        filtered[mode] = {"m1": d["m1"], "m2": d["m2"], "sizes": sizes_with_data,
-                          "means": means, "lows": lows, "highs": highs}
-        if lows:
-            y_min = min(y_min, min(lows))
-            y_max = max(y_max, max(highs))
-
-    y_pad = 0.05 * (y_max - y_min)
-    y_lo, y_hi = y_min - y_pad, y_max + y_pad
-
-    label = None
-    for ax, mode in zip(axes, modes_with_data):
-        d = filtered[mode]
-        m1, m2 = d["m1"], d["m2"]
-        label = f"P({METHOD_LABELS[m1]} > {METHOD_LABELS[m2]})"
-        sizes_with_data = d["sizes"]
-
-        means = np.array(d["means"])
-        err_low = means - np.array(d["lows"])
-        err_high = np.array(d["highs"]) - means
-
-        x_pos = np.arange(len(sizes_with_data))
-
-        ax.bar(x_pos, means, yerr=[err_low, err_high], color=METHOD_COLORS[m1],
-               hatch=MODE_HATCHES[mode], edgecolor="white", linewidth=0.6,
-               capsize=0, error_kw={"elinewidth": 1.0, "ecolor": "black"},
-               width=0.6, zorder=3, label=label)
-        ax.axhline(0.5, linestyle="--", color="black", alpha=0.5, zorder=2, label="No difference")
-
-        ax.set_xticks(x_pos)
-        ax.set_xticklabels(sizes_with_data)
-        ax.set_xlabel("Instance size", labelpad=8)
-        ax.set_ylim(y_lo, y_hi)
-        ax.set_title(MODE_LABELS[mode], pad=12)
-
-        ax.grid(True, axis='y', color='#CCCCCC', linewidth=0.8, zorder=1)
-        ax.set_axisbelow(True)
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
-
-        ax.legend(frameon=True, framealpha=0.9, edgecolor='#CCCCCC',
-                  loc='upper right')
-
-    axes[0].set_ylabel(label, labelpad=8)
+    # Legend below the axis: one column per method, its two modes stacked, so
+    # the two bars of the same color read as a pair.
+    handle_by_combo = dict(zip(combos, combo_bar_handles))
+    legend_columns = [
+        [(handle_by_combo[(method, mode)], f"{METHOD_LABELS[method]} ({MODE_LABELS[mode]})")
+         for mode in MODE_ORDER if (method, mode) in handle_by_combo]
+        for method in METHODS
+    ]
+    baseline_entries = ([(cpsat_handle, "CP-SAT")] if cpsat_handle else []) + \
+        list(zip(baseline_bar_handles, [BASELINE_LABELS.get(b, b) for b in baselines]))
+    if legend_ncol > len(legend_columns):
+        # Room to the right of the method columns -- baselines go there.
+        legend_columns.append(baseline_entries)
+    else:
+        # Narrow figure: a third column would stretch the legend wider than
+        # the axes, so the baselines go into extra rows under the methods.
+        for i, entry in enumerate(baseline_entries):
+            legend_columns[i % len(legend_columns)].append(entry)
+    legend_below(fig, legend_columns)
 
     save_fig(fig, out_stem)
     plt.close(fig)
@@ -397,17 +287,21 @@ def plot_scaling(data: dict):
     x_labels = TEST_SIZES
     x_pos = np.arange(len(x_labels))
 
+    baseline_column = []
     for b, means in data["baselines"].items():
-        ax.plot(x_pos, means, linestyle="--", color=BASELINE_COLORS.get(b, "gray"),
-                alpha=0.7, marker="x", label=b, zorder=2)
+        line, = ax.plot(x_pos, means, linestyle="--", color=BASELINE_COLORS.get(b, "gray"),
+                        alpha=0.7, marker="x", label=b, zorder=2)
+        baseline_column.append((line, BASELINE_LABELS.get(b, b)))
 
+    entry_by_combo = {}
     for key, d in data["methods"].items():
         method, mode = split_combo_key(key)
         means = np.array(d["means"])
-        ax.plot(x_pos, means,
-                label=f"{METHOD_LABELS[method]} ({MODE_LABELS[mode]})",
-                color=METHOD_COLORS[method], linestyle=MODE_LINESTYLES[mode],
-                marker=MODE_MARKERS[mode], zorder=3)
+        label = f"{METHOD_LABELS[method]} ({MODE_LABELS[mode]})"
+        line, = ax.plot(x_pos, means, label=label,
+                        color=METHOD_COLORS[method], linestyle=MODE_LINESTYLES[mode],
+                        marker=MODE_MARKERS[mode], zorder=3)
+        entry_by_combo[(method, mode)] = (line, label)
 
     ax.set_xticks(x_pos)
     ax.set_xticklabels(x_labels)
@@ -419,37 +313,56 @@ def plot_scaling(data: dict):
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
 
-    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.15),
-              ncol=4, frameon=False)
+    # One column per method (both modes stacked), then the baselines in
+    # columns of the same height.
+    columns = [[entry_by_combo[(m, mode)] for mode in MODE_ORDER if (m, mode) in entry_by_combo]
+               for m in METHODS]
+    columns = [c for c in columns if c]
+    height = max((len(c) for c in columns), default=2)
+    legend_below(fig, columns + chunked(baseline_column, height))
 
     save_fig(fig, "05_scaling")
     plt.close(fig)
 
 
 def plot_efficiency(data: dict):
-    """Plot 7: Runtime efficiency (sampling only). Isolates the per-decision
-    GNN forward-pass time, i.e. just the compute the pooling/no-pooling
-    difference actually touches, with the fixed per-instance overhead (env
-    setup, I/O, sampling-loop bookkeeping) stripped out. Log-scale y (the
-    range spans about two orders of magnitude). The slowdown factor itself is
-    reported in the surrounding text. 200x10 and Hurink are excluded (see
-    EFFICIENCY_SIZES / analyze_efficiency).
+    """Plot 7: Runtime efficiency, one line per (method, mode). Isolates the
+    per-decision GNN forward-pass time, i.e. just the compute the
+    pooling/no-pooling difference actually touches, with the fixed
+    per-instance overhead (env setup, I/O, sampling-loop bookkeeping)
+    stripped out. Both inference modes are shown, and they measure different
+    regimes: greedy runs one graph per forward pass, so the call is dominated
+    by fixed per-call overhead and stays flat across sizes for both methods,
+    whereas sampling batches num_sample copies of the instance into one pass
+    and therefore actually exercises the per-node compute the pooling
+    difference lives in. Log-scale y (the range spans about two orders of
+    magnitude). The slowdown factor itself is reported in the surrounding
+    text. 200x10 and Hurink are excluded (see EFFICIENCY_SIZES /
+    analyze_efficiency).
     """
     sizes = data["sizes"]
     x_pos = np.arange(len(sizes))
 
     fig, ax = plt.subplots(figsize=(TEXTWIDTH * 0.7, TEXTWIDTH * 0.5))
 
+    legend_columns = []
     for method in METHODS:
-        d = data["methods"][method]["forward_ms"]
-        mean = np.array(d["mean"])
-        lo = np.array(d["lo"])
-        hi = np.array(d["hi"])
-        color = METHOD_COLORS[method]
-        ax.plot(x_pos, mean, color=color, marker=MODE_MARKERS["sample"],
-                linestyle=MODE_LINESTYLES["sample"],
-                label=METHOD_LABELS[method], zorder=3)
-        ax.fill_between(x_pos, lo, hi, color=color, alpha=0.15, zorder=2)
+        column = []
+        for mode in MODE_ORDER:
+            entry = data["methods"].get(combo_key(method, mode))
+            if entry is None:
+                continue
+            d = entry["forward_ms"]
+            mean = np.array(d["mean"])
+            lo = np.array(d["lo"])
+            hi = np.array(d["hi"])
+            color = METHOD_COLORS[method]
+            label = f"{METHOD_LABELS[method]} ({MODE_LABELS[mode]})"
+            line, = ax.plot(x_pos, mean, color=color, marker=MODE_MARKERS[mode],
+                            linestyle=MODE_LINESTYLES[mode], label=label, zorder=3)
+            ax.fill_between(x_pos, lo, hi, color=color, alpha=0.15, zorder=2)
+            column.append((line, label))
+        legend_columns.append(column)
 
     ax.set_yscale("log")
     ax.set_xticks(x_pos)
@@ -462,8 +375,7 @@ def plot_efficiency(data: dict):
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
 
-    ax.legend(frameon=True, framealpha=0.9, edgecolor='#CCCCCC',
-              loc='upper left')
+    legend_below(fig, legend_columns)
 
     save_fig(fig, "07_efficiency")
     plt.close(fig)
@@ -491,25 +403,6 @@ def main():
          lambda: plot_iqm_bars(data["iqm_bars_hurink"], HURINK_DATASETS, "02b_iqm_bars_hurink",
                                (TEXTWIDTH * 0.7, TEXTWIDTH * 0.50),
                                baseline_keys=["CPSAT", "BestDR"], legend_ncol=2)),
-        ("03 Performance Profiles",
-         lambda: plot_performance_profiles(data["performance_profiles"], TEST_SIZES, {}, 3,
-                                           "03_performance_profiles",
-                                           (TEXTWIDTH, TEXTWIDTH * 0.95))),
-        ("03b Performance Profiles (Hurink)",
-         lambda: plot_performance_profiles(data["performance_profiles_hurink"], HURINK_DATASETS, HURINK_LABELS, 3,
-                                           "03b_performance_profiles_hurink",
-                                           (TEXTWIDTH, TEXTWIDTH * 0.40))),
-        ("03c Performance Profiles (10x5)",
-         lambda: plot_performance_profiles(data["performance_profiles"], ["10x5"], {}, 1,
-                                           "03c_performance_profiles_10x5",
-                                           (TEXTWIDTH * 0.6, TEXTWIDTH * 0.6))),
-        ("04 Probability of Improvement",
-         lambda: plot_probability_of_improvement(data["probability_of_improvement"],
-                                                  "04_probability_of_improvement",
-                                                  exclude={("sample", "200x10")})),
-        ("04b Probability of Improvement (Hurink)",
-         lambda: plot_probability_of_improvement(data["probability_of_improvement_hurink"],
-                                                  "04b_probability_of_improvement_hurink")),
         ("05 Scaling",
          lambda: plot_scaling(data["scaling"])),
         ("07 Efficiency",

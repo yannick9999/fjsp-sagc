@@ -43,6 +43,10 @@ from common import (
 
 set_thesis_style()
 
+# Sample-then-greedy, used for bar order and for the order of the two mode
+# entries within a method's legend column, so every figure lists them alike.
+MODE_ORDER = ["sample", "greedy"]
+
 
 def load_analysis(split: str) -> dict:
     path = cache_path(split)
@@ -61,6 +65,36 @@ def save_fig(fig, out_dir: Path, stem: str) -> None:
     print(f"  Saved {name}.pdf / .png")
 
 
+def legend_below(fig, columns: list[list]) -> None:
+    """Place a legend underneath the figure, one list of entries per column.
+
+    `columns` is a list of columns, each a list of (handle, label) pairs --
+    so entries that belong together (e.g. both modes of one method) sit above
+    each other in the same column instead of being spread across a row.
+    Matplotlib fills a multi-column legend top-to-bottom within a column, so
+    the columns just get concatenated; shorter ones are padded with invisible
+    entries to keep every column the same height (otherwise matplotlib
+    redistributes the entries and the grouping breaks).
+
+    Drawn as a figure legend with an "outside" location so constrained_layout
+    reserves room for it below the x-label, instead of it landing on top of
+    the axis labels at some hand-tuned offset.
+    """
+    columns = [c for c in columns if c]
+    if not columns:
+        return
+    nrow = max(len(c) for c in columns)
+
+    handles, labels = [], []
+    for col in columns:
+        padded = col + [(plt.Line2D([], [], linestyle="none"), "")] * (nrow - len(col))
+        handles.extend(h for h, _ in padded)
+        labels.extend(lbl for _, lbl in padded)
+
+    fig.legend(handles, labels, loc="outside lower center",
+               ncol=len(columns), frameon=False, handlelength=2.0)
+
+
 def plot_training_curves(data: dict, split: str, out_dir: Path):
     """Training-curve metric is makespan normalized by MWR (lower is better),
     logged during training for whichever split ('indist_norm'/'ood_norm')
@@ -69,6 +103,7 @@ def plot_training_curves(data: dict, split: str, out_dir: Path):
     """
     fig, ax = plt.subplots(figsize=(TEXTWIDTH, TEXTWIDTH * 0.45))
 
+    legend_columns = []
     for method in METHODS:
         curve = data.get(method)
         if curve is None:
@@ -76,10 +111,11 @@ def plot_training_curves(data: dict, split: str, out_dir: Path):
 
         color = METHOD_COLORS[method]
         label = METHOD_LABELS[method]
-        ax.plot(curve["env_steps"], curve["mean"],
-                color=color, label=label, zorder=3)
+        line, = ax.plot(curve["env_steps"], curve["mean"],
+                        color=color, label=label, zorder=3)
         ax.fill_between(curve["env_steps"], curve["lo"], curve["hi"],
                         color=color, alpha=0.15, zorder=2)
+        legend_columns.append([(line, label)])
 
     # Axis labels
     ax.set_xlabel(r"Environment steps ($\times 10^6$)", labelpad=8)
@@ -102,9 +138,8 @@ def plot_training_curves(data: dict, split: str, out_dir: Path):
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
 
-    # Legend
-    ax.legend(frameon=True, framealpha=0.9, edgecolor='#CCCCCC',
-              loc='upper right')
+    # Legend below the axis, one method per column
+    legend_below(fig, legend_columns)
 
     save_fig(fig, out_dir, "01_training_curves")
     plt.close(fig)
@@ -114,7 +149,8 @@ def plot_iqm_bars(data: dict, sizes: list[str], out_stem: str, figsize: tuple[fl
                   out_dir: Path,
                   exclude: set[tuple[str, str, str]] | None = None,
                   baseline_keys: list[str] | None = None,
-                  methods: list[str] | None = None):
+                  methods: list[str] | None = None,
+                  legend_ncol: int = 3):
     """IQM as a grouped bar chart. One bar per (method, mode), optionally plus
     one bar per entry in `baseline_keys` (e.g. CP-SAT, best dispatching rule).
 
@@ -128,11 +164,14 @@ def plot_iqm_bars(data: dict, sizes: list[str], out_stem: str, figsize: tuple[fl
     against the full-instance-count runs at other sizes.
 
     `methods` restricts which of METHODS gets a bar (default: all of them).
+
+    `legend_ncol` is the width budget for the legend below the axis: with
+    room for more columns than there are methods the baselines get a column
+    of their own, otherwise they are stacked underneath the method columns.
     """
     exclude = exclude or set()
     methods = methods or METHODS
-    mode_order = ["sample", "greedy"]
-    combos = [(method, mode) for mode in mode_order for method in methods]
+    combos = [(method, mode) for mode in MODE_ORDER for method in methods]
     baseline_keys = baseline_keys or []
     # CP-SAT is the normalization anchor (score = C_cpsat / C), so its own
     # score is trivially ~1 everywhere -- shown as a reference line instead
@@ -230,14 +269,25 @@ def plot_iqm_bars(data: dict, sizes: list[str], out_stem: str, figsize: tuple[fl
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
 
-    # Legend below the axis
-    all_handles = combo_bar_handles + ([cpsat_handle] if cpsat_handle else []) + baseline_bar_handles
-    all_labels = [f"{METHOD_LABELS[m]} ({MODE_LABELS[mo]})" for m, mo in combos] + \
-        (["CP-SAT"] if cpsat_handle else []) + \
-        [BASELINE_LABELS.get(b, b) for b in baselines]
-    ax.legend(all_handles, all_labels, loc="upper center",
-              bbox_to_anchor=(0.5, -0.12), ncol=3, frameon=False,
-              handlelength=2.0)
+    # Legend below the axis: one column per method, its two modes stacked, so
+    # the two bars of the same color read as a pair.
+    handle_by_combo = dict(zip(combos, combo_bar_handles))
+    legend_columns = [
+        [(handle_by_combo[(method, mode)], f"{METHOD_LABELS[method]} ({MODE_LABELS[mode]})")
+         for mode in MODE_ORDER if (method, mode) in handle_by_combo]
+        for method in methods
+    ]
+    baseline_entries = ([(cpsat_handle, "CP-SAT")] if cpsat_handle else []) + \
+        list(zip(baseline_bar_handles, [BASELINE_LABELS.get(b, b) for b in baselines]))
+    if legend_ncol > len(legend_columns):
+        # Room to the right of the method columns -- baselines go there.
+        legend_columns.append(baseline_entries)
+    else:
+        # Narrow figure: another column would stretch the legend wider than
+        # the axes, so the baselines go into extra rows under the methods.
+        for i, entry in enumerate(baseline_entries):
+            legend_columns[i % len(legend_columns)].append(entry)
+    legend_below(fig, legend_columns)
 
     save_fig(fig, out_dir, out_stem)
     plt.close(fig)
