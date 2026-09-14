@@ -46,13 +46,22 @@ def load_analysis() -> dict:
         return pickle.load(f)
 
 
-def save_fig(fig, stem: str) -> None:
+def save_fig(fig, stem: str, svg: bool = False) -> None:
     """Save `fig` as both PDF (for the thesis) and PNG (for quick viewing),
-    with the "song_fw_" prefix common to all figures from this script."""
+    with the "song_fw_" prefix common to all figures from this script.
+    With `svg=True` additionally as SVG, with all text kept as real text
+    elements (not outlined to paths) so labels, ticks and legend entries stay
+    selectable/editable in vector editors."""
     name = f"song_fw_{stem}"
     fig.savefig(PLOTS_DIR / f"{name}.pdf")
     fig.savefig(PLOTS_DIR / f"{name}.png", dpi=300)
-    print(f"  Saved {name}.pdf / .png")
+    formats = ".pdf / .png"
+    if svg:
+        with plt.rc_context({"svg.fonttype": "none"}):
+            fig.savefig(PLOTS_DIR / f"{name}.svg", bbox_inches="tight", pad_inches=0.05,
+                        metadata={"Date": None})
+        formats += " / .svg"
+    print(f"  Saved {name} {formats}")
 
 
 def legend_below(fig, columns: list[list]) -> None:
@@ -140,7 +149,7 @@ def plot_training_curves(data: dict):
 def plot_iqm_bars(data: dict, sizes: list[str], out_stem: str, figsize: tuple[float, float],
                   exclude: set[tuple[str, str, str]] | None = None,
                   baseline_keys: list[str] | None = None,
-                  legend_ncol: int = 3):
+                  legend_ncol: int = 3, svg: bool = False):
     """IQM as a grouped bar chart. One bar per (method, mode), optionally plus
     one bar per entry in `baseline_keys` (e.g. CP-SAT, best dispatching rule).
 
@@ -276,7 +285,7 @@ def plot_iqm_bars(data: dict, sizes: list[str], out_stem: str, figsize: tuple[fl
             legend_columns[i % len(legend_columns)].append(entry)
     legend_below(fig, legend_columns)
 
-    save_fig(fig, out_stem)
+    save_fig(fig, out_stem, svg=svg)
     plt.close(fig)
 
 
@@ -377,7 +386,7 @@ def plot_efficiency(data: dict):
 
     legend_below(fig, legend_columns)
 
-    save_fig(fig, "07_efficiency")
+    save_fig(fig, "07_efficiency", svg=True)
     plt.close(fig)
 
 
@@ -398,7 +407,7 @@ def main():
          lambda: plot_iqm_bars(data["iqm_bars"], TEST_SIZES, "02_iqm_bars",
                                (TEXTWIDTH, TEXTWIDTH * 0.45),
                                exclude={("200x10", "sagc", "sample"), ("200x10", "nopooling", "sample")},
-                               baseline_keys=["CPSAT", "BestDR"])),
+                               baseline_keys=["CPSAT", "BestDR"], svg=True)),
         ("02b IQM Bars (Hurink)",
          lambda: plot_iqm_bars(data["iqm_bars_hurink"], HURINK_DATASETS, "02b_iqm_bars_hurink",
                                (TEXTWIDTH * 0.7, TEXTWIDTH * 0.50),
@@ -407,6 +416,12 @@ def main():
          lambda: plot_scaling(data["scaling"])),
         ("07 Efficiency",
          lambda: plot_efficiency(data["efficiency"])),
+        # Same as 02, but without the best dispatching rule bar.
+        ("08 IQM Bars (no BestDR)",
+         lambda: plot_iqm_bars(data["iqm_bars"], TEST_SIZES, "08_iqm_bars_no_bestdr",
+                               (TEXTWIDTH, TEXTWIDTH * 0.45),
+                               exclude={("200x10", "sagc", "sample"), ("200x10", "nopooling", "sample")},
+                               baseline_keys=["CPSAT"], svg=True)),
     ]
 
     total = len(steps)

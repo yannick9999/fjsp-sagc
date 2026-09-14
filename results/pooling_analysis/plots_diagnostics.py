@@ -428,6 +428,67 @@ def plot_score_grid(data):
         print("  Saved diagnostics_score_grid.pdf")
 
 
+def plot_score_bars(table):
+    """Summary bar chart for the slides: one bar per structural criterion,
+    the per-size scores from the score table averaged over the ten-machine
+    test sets only. The two five-machine sets behave systematically
+    differently (see the score table), so including them would make the
+    spread across sets look like estimation uncertainty. Slack correlation
+    is left out on purpose: its sign flips during the episode, so a single
+    near-zero bar would misrepresent it -- the score grid shows the curve.
+
+    The dashed zero line marks what a random selection under the same
+    budget yields (all scores are defined relative to random, positive =
+    SAGC beats random) and is labeled in-plot so the axis needs no reading.
+    """
+    criteria = [
+        ("crit_mean", "Critical retention"),
+        ("succ_mean", "Successor retention"),
+        ("front_mean", "Frontier distance"),
+    ]
+    sizes = [s for s in GRID_TEN_MACHINE_SIZES if s in table.index]
+    sub = table.loc[sizes]
+    means = np.array([sub[col].mean() for col, _ in criteria])
+    labels = [lbl for _, lbl in criteria]
+
+    zero_color = "#7F7F7F"
+
+    with plt.rc_context(set_thesis_style()):
+        # Horizontal bars, about 2:1 wide -- the long criterion names read
+        # on one line and the figure sits flat next to slide text.
+        fig, ax = plt.subplots(figsize=(TEXTWIDTH * 0.6, TEXTWIDTH * 0.3))
+
+        y = np.arange(len(criteria))
+        ax.barh(y, means, height=0.5, color="#4C72B0", zorder=3)
+        # Values written at the bar ends so no axis/grid reading is needed.
+        for yi, val in zip(y, means):
+            ax.text(val + 0.005, yi, f"{val:.2f}", ha="left", va="center", fontsize=8)
+
+        # Reference line for random selection: starts the x-axis below zero
+        # so the line floats clear of the frame, with its own color to set
+        # it apart from the spines, and its label alongside.
+        ax.axvline(0.0, color=zero_color, linestyle="--", linewidth=1.2, zorder=4)
+        ax.text(0.004, -0.55, "random selection", ha="left", va="bottom",
+                fontsize=8, color=zero_color, zorder=5)
+
+        ax.set_yticks(y)
+        ax.set_yticklabels(labels)
+        ax.invert_yaxis()  # first criterion on top
+        ax.set_ylim(len(criteria) - 0.5, -0.9)  # room for the line label
+        ax.set_xlim(-0.05, 0.25)
+        ax.set_xlabel("Agreement with criterion")
+
+        ax.tick_params(axis="y", length=0)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.spines["left"].set_visible(False)
+
+        fig.savefig(OUT_DIR / "diagnostics_score_bars.pdf")
+        fig.savefig(OUT_DIR / "diagnostics_score_bars.png", dpi=300)
+        plt.close(fig)
+        print("  Saved diagnostics_score_bars.pdf / .png")
+
+
 # Main
 
 def main():
@@ -459,6 +520,9 @@ def main():
 
     print("\nGenerating score grid ...")
     plot_score_grid(data)
+
+    print("\nGenerating score bars ...")
+    plot_score_bars(table)
 
     print("\nDone.")
 
