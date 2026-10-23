@@ -31,8 +31,8 @@ PLOTS_DIR.mkdir(exist_ok=True)
 # Method names, and the on-disk folder for each (folder holds seed{n}/ for
 # training and seed{n}/test/... for testing).
 METHODS = ["sagc", "nopooling", "sagc_20x10"]
-METHOD_LABELS = {"sagc": "Song+SAGC (multi size)", "nopooling": "Song (multi size)",
-                 "sagc_20x10": "Song+SAGC (20x10)"}
+METHOD_LABELS = {"sagc": "HGNN+SAGC (multi-size)", "nopooling": "HGNN (multi-size)",
+                 "sagc_20x10": "HGNN+SAGC (20x10)"}
 METHOD_DIRS = {"sagc": "multi_size_training_sagc", "nopooling": "multi_size_training_nopooling",
                "sagc_20x10": "song_sagc_20x10"}
 # Cool hues, deliberately far from the warm DR family below so the two groups

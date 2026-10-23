@@ -262,10 +262,12 @@ def analyze_training_curves(split: str) -> dict:
 
         min_len = min(len(c) for c in curves)
         env_steps = curves[0]["env_steps"].values[:min_len]
+        iterations = curves[0]["iteration"].values[:min_len]
         norms = np.stack([c[column].values[:min_len] for c in curves])
 
         result[method] = {
             "env_steps": env_steps,
+            "iteration": iterations,
             "mean": norms.mean(axis=0),
             "lo": norms.min(axis=0),
             "hi": norms.max(axis=0),

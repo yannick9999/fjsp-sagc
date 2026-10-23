@@ -17,7 +17,6 @@ from pathlib import Path
 
 import numpy as np
 import matplotlib.pyplot as plt
-import matplotlib.ticker as mticker
 
 from common import (
     BASELINE_COLORS,
@@ -56,13 +55,18 @@ def load_analysis(split: str) -> dict:
         return pickle.load(f)
 
 
-def save_fig(fig, out_dir: Path, stem: str) -> None:
+def save_fig(fig, out_dir: Path, stem: str, svg: bool = False) -> None:
     """Save `fig` as both PDF (for the thesis) and PNG (for quick viewing),
-    with the "multi_size_" prefix common to all figures from this script."""
+    with the "multi_size_" prefix common to all figures from this script.
+    With `svg=True`, an SVG is written as well."""
     name = f"multi_size_{stem}"
     fig.savefig(out_dir / f"{name}.pdf")
     fig.savefig(out_dir / f"{name}.png", dpi=300)
-    print(f"  Saved {name}.pdf / .png")
+    formats = ".pdf / .png"
+    if svg:
+        fig.savefig(out_dir / f"{name}.svg")
+        formats += " / .svg"
+    print(f"  Saved {name}{formats}")
 
 
 def legend_below(fig, columns: list[list]) -> None:
@@ -111,21 +115,15 @@ def plot_training_curves(data: dict, split: str, out_dir: Path):
 
         color = METHOD_COLORS[method]
         label = METHOD_LABELS[method]
-        line, = ax.plot(curve["env_steps"], curve["mean"],
+        line, = ax.plot(curve["iteration"], curve["mean"],
                         color=color, label=label, zorder=3)
-        ax.fill_between(curve["env_steps"], curve["lo"], curve["hi"],
+        ax.fill_between(curve["iteration"], curve["lo"], curve["hi"],
                         color=color, alpha=0.15, zorder=2)
         legend_columns.append([(line, label)])
 
     # Axis labels
-    ax.set_xlabel(r"Environment steps ($\times 10^6$)", labelpad=8)
+    ax.set_xlabel("Iterations", labelpad=8)
     ax.set_ylabel("Validation makespan / MWR", labelpad=8)
-
-    # X-axis: show 0, 1, 2, 3, 4 with "×10⁶" in axis label
-    ax.xaxis.set_major_locator(mticker.MultipleLocator(1e6))
-    ax.xaxis.set_major_formatter(mticker.FuncFormatter(
-        lambda x, _: f"{int(x/1e6)}"
-    ))
 
     # Align plot to y-axis
     ax.set_xlim(left=0)
@@ -141,7 +139,7 @@ def plot_training_curves(data: dict, split: str, out_dir: Path):
     # Legend below the axis, one method per column
     legend_below(fig, legend_columns)
 
-    save_fig(fig, out_dir, "01_training_curves")
+    save_fig(fig, out_dir, "01_training_curves", svg=True)
     plt.close(fig)
 
 
@@ -270,10 +268,12 @@ def plot_iqm_bars(data: dict, sizes: list[str], out_stem: str, figsize: tuple[fl
     ax.spines['right'].set_visible(False)
 
     # Legend below the axis: one column per method, its two modes stacked, so
-    # the two bars of the same color read as a pair.
+    # the two bars of the same color read as a pair. The mode goes into the
+    # method label's parentheses ("HGNN+SAGC (20x10, Greedy)") -- a second
+    # pair of parentheses makes the legend wider than the figure.
     handle_by_combo = dict(zip(combos, combo_bar_handles))
     legend_columns = [
-        [(handle_by_combo[(method, mode)], f"{METHOD_LABELS[method]} ({MODE_LABELS[mode]})")
+        [(handle_by_combo[(method, mode)], f"{METHOD_LABELS[method][:-1]}, {MODE_LABELS[mode]})")
          for mode in MODE_ORDER if (method, mode) in handle_by_combo]
         for method in methods
     ]

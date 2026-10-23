@@ -38,6 +38,14 @@ set_thesis_style()
 # entries within a method's legend column, so every figure lists them alike.
 MODE_ORDER = ["sample", "greedy"]
 
+# Height of the "out of memory" marker in plot 7, in ms: above every measured
+# value but inside the axis, in the empty top-right corner.
+OOM_MARKER_Y = 210
+
+# Last PPO iteration shown in the training curves (plot 1); later iterations
+# add nothing visible.
+MAX_ITERATION = 1000
+
 
 def load_analysis() -> dict:
     if not ANALYSIS_CACHE.exists():
@@ -102,6 +110,7 @@ def chunked(entries: list, height: int) -> list[list]:
 
 
 def plot_training_curves(data: dict):
+    """Training curves over PPO iterations, cut off at MAX_ITERATION."""
     fig, ax = plt.subplots(figsize=(TEXTWIDTH, TEXTWIDTH * 0.45))
 
     legend_columns = []
@@ -110,26 +119,24 @@ def plot_training_curves(data: dict):
         if curve is None:
             continue
 
+        # Drop points past the cut-off so they don't affect the y-range
+        keep = curve["iteration"] <= MAX_ITERATION
+        iterations = curve["iteration"][keep]
+
         color = METHOD_COLORS[method]
         label = METHOD_LABELS[method]
-        line, = ax.plot(curve["env_steps"], curve["mean"],
+        line, = ax.plot(iterations, curve["mean"][keep],
                         color=color, label=label, zorder=3)
-        ax.fill_between(curve["env_steps"], curve["lo"], curve["hi"],
+        ax.fill_between(iterations, curve["lo"][keep], curve["hi"][keep],
                         color=color, alpha=0.15, zorder=2)
         legend_columns.append([(line, label)])
 
     # Axis labels
-    ax.set_xlabel(r"Environment steps ($\times 10^6$)", labelpad=8)
+    ax.set_xlabel("Iterations", labelpad=8)
     ax.set_ylabel("Validation makespan", labelpad=8)
 
-    # X-axis: show 0, 1, 2, 3, 4 with "×10⁶" in axis label
-    ax.xaxis.set_major_locator(mticker.MultipleLocator(1e6))
-    ax.xaxis.set_major_formatter(mticker.FuncFormatter(
-        lambda x, _: f"{int(x/1e6)}"
-    ))
-
-    # Align plot to y-axis
-    ax.set_xlim(left=0)
+    # Align plot to y-axis, end exactly at the cut-off
+    ax.set_xlim(0, MAX_ITERATION)
 
     # Horizontal grid lines only
     ax.grid(True, axis='y', color='#CCCCCC', linewidth=0.8, zorder=1)
@@ -346,13 +353,19 @@ def plot_efficiency(data: dict):
     and therefore actually exercises the per-node compute the pooling
     difference lives in. Log-scale y (the range spans about two orders of
     magnitude). The slowdown factor itself is reported in the surrounding
-    text. 200x10 and Hurink are excluded (see EFFICIENCY_SIZES /
-    analyze_efficiency).
+    text. Hurink is excluded (different hardware, see analyze_efficiency), as
+    is the single Song sampling point at 200x10 -- that run ran out of memory
+    at the full instance count, so its timing isn't comparable to the rest of
+    the series. It is marked with an x and annotated instead of silently
+    dropped, so the line ending early doesn't read as missing data.
     """
     sizes = data["sizes"]
     x_pos = np.arange(len(sizes))
+    exclude = {("nopooling", "sample", "200x10")}
 
-    fig, ax = plt.subplots(figsize=(TEXTWIDTH * 0.7, TEXTWIDTH * 0.5))
+    # Slightly wider than the other 0.7-width figures: with 200x10 there are
+    # nine size labels, which collide at 0.7.
+    fig, ax = plt.subplots(figsize=(TEXTWIDTH * 0.85, TEXTWIDTH * 0.5))
 
     legend_columns = []
     for method in METHODS:
@@ -362,24 +375,48 @@ def plot_efficiency(data: dict):
             if entry is None:
                 continue
             d = entry["forward_ms"]
-            mean = np.array(d["mean"])
-            lo = np.array(d["lo"])
-            hi = np.array(d["hi"])
+            mean = np.array(d["mean"], dtype=float)
+            lo = np.array(d["lo"], dtype=float)
+            hi = np.array(d["hi"], dtype=float)
+            # NaN leaves a gap in the line instead of drawing an excluded point.
+            for i, size in enumerate(sizes):
+                if (method, mode, size) in exclude:
+                    mean[i] = lo[i] = hi[i] = np.nan
             color = METHOD_COLORS[method]
             label = f"{METHOD_LABELS[method]} ({MODE_LABELS[mode]})"
             line, = ax.plot(x_pos, mean, color=color, marker=MODE_MARKERS[mode],
                             linestyle=MODE_LINESTYLES[mode], label=label, zorder=3)
-            ax.fill_between(x_pos, lo, hi, color=color, alpha=0.15, zorder=2)
             column.append((line, label))
         legend_columns.append(column)
 
+    # Mark the excluded run near the top of the axis, detached from its line
+    # (no connecting segment) so it reads as "no measurement" rather than as
+    # a data point at that height.
+    for method, mode, size in sorted(exclude):
+        if size not in sizes:
+            continue
+        ax.plot(sizes.index(size), OOM_MARKER_Y, marker="x", markersize=7,
+                markeredgewidth=1.6, linestyle="none",
+                color=METHOD_COLORS[method], zorder=4)
+        ax.annotate("out of memory",
+                    xy=(sizes.index(size) - 0.15, OOM_MARKER_Y),
+                    ha="right", va="center", fontsize=8,
+                    color=METHOD_COLORS[method], zorder=4)
+
+    # Log y, but with plain decimal ticks at human-readable values instead of
+    # the default 10^1/10^2 decades plus a dense minor grid -- the data spans
+    # about two decades, so decade ticks alone leave most values unreadable.
     ax.set_yscale("log")
+    ax.set_ylim(1.8, 300)
+    ax.set_yticks([2, 5, 10, 20, 50, 100])
+    ax.yaxis.set_major_formatter(mticker.ScalarFormatter())
+    ax.yaxis.set_minor_locator(mticker.NullLocator())
     ax.set_xticks(x_pos)
     ax.set_xticklabels(sizes)
     ax.set_xlabel("Instance size", labelpad=8)
     ax.set_ylabel("Forward pass per decision (ms)", labelpad=8)
 
-    ax.grid(True, axis='y', which='both', color='#CCCCCC', linewidth=0.6, zorder=1)
+    ax.grid(True, axis='y', which='major', color='#CCCCCC', linewidth=0.6, zorder=1)
     ax.set_axisbelow(True)
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
@@ -406,7 +443,7 @@ def main():
         ("02 IQM Bars",
          lambda: plot_iqm_bars(data["iqm_bars"], TEST_SIZES, "02_iqm_bars",
                                (TEXTWIDTH, TEXTWIDTH * 0.45),
-                               exclude={("200x10", "sagc", "sample"), ("200x10", "nopooling", "sample")},
+                               exclude={("200x10", "nopooling", "sample")},
                                baseline_keys=["CPSAT", "BestDR"], svg=True)),
         ("02b IQM Bars (Hurink)",
          lambda: plot_iqm_bars(data["iqm_bars_hurink"], HURINK_DATASETS, "02b_iqm_bars_hurink",
@@ -416,11 +453,13 @@ def main():
          lambda: plot_scaling(data["scaling"])),
         ("07 Efficiency",
          lambda: plot_efficiency(data["efficiency"])),
-        # Same as 02, but without the best dispatching rule bar.
+        # Same as 02, but without the best dispatching rule bar. Only the
+        # Song sampling run at 200x10 used a reduced instance count, so only
+        # that bar is dropped here -- Song+SAGC (sample) is shown.
         ("08 IQM Bars (no BestDR)",
          lambda: plot_iqm_bars(data["iqm_bars"], TEST_SIZES, "08_iqm_bars_no_bestdr",
                                (TEXTWIDTH, TEXTWIDTH * 0.45),
-                               exclude={("200x10", "sagc", "sample"), ("200x10", "nopooling", "sample")},
+                               exclude={("200x10", "nopooling", "sample")},
                                baseline_keys=["CPSAT"], svg=True)),
     ]
 

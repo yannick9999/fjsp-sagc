@@ -233,10 +233,12 @@ def analyze_training_curves() -> dict:
         # Reduce to common env_steps
         min_len = min(len(c) for c in curves)
         env_steps = curves[0]["env_steps"].values[:min_len]
+        iterations = curves[0]["iteration"].values[:min_len]
         makespans = np.stack([c["makespan_avg"].values[:min_len] for c in curves])
 
         result[method] = {
             "env_steps": env_steps,
+            "iteration": iterations,
             "mean": makespans.mean(axis=0),
             "lo": makespans.min(axis=0),
             "hi": makespans.max(axis=0),

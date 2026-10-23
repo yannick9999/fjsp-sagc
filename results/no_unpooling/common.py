@@ -17,7 +17,7 @@ ANALYSIS_CACHE = SCRIPT_DIR / "analysis_cache.pkl"
 
 # Method names (folder name without "_20x10" and without ".pt")
 METHODS = ["sagc", "nopooling"]
-METHOD_LABELS = {"sagc": "Song+SAGC", "nopooling": "Song"}
+METHOD_LABELS = {"sagc": "HGNN+SAGC", "nopooling": "HGNN"}
 # Cool hues, deliberately far from the warm DR family below so the two groups
 # never get confused. Only 2 of these are used for now, leaving standard
 # tab10-ish colors (green, orange, plain red, ...) free for future methods.
@@ -60,9 +60,10 @@ HURINK_LABELS = {"edata": "Edata", "rdata": "Rdata", "vdata": "Vdata"}
 # to keep analyze.py's SIZE_FOLDER_MAP[size] lookups working unchanged.
 SIZE_FOLDER_MAP.update({d: d for d in HURINK_DATASETS})
 
-# Sizes for the runtime/efficiency plot: sampling-only, so 200x10 is dropped
-# (too slow to sample repeatedly, same reasoning as the 02/04 exclusions).
-EFFICIENCY_SIZES = [s for s in TEST_SIZES if s != "200x10"]
+# Sizes for the runtime/efficiency plot: all test sizes. Only the Song
+# sampling run at 200x10 used a reduced instance count; that single point is
+# dropped in plot_efficiency rather than the whole size.
+EFFICIENCY_SIZES = list(TEST_SIZES)
 
 # Baselines (dispatching rules + CP-SAT). Add GA later.
 BASELINES = ["MWR", "SPT", "MOR", "FIFO", "CPSAT"]

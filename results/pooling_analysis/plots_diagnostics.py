@@ -372,60 +372,103 @@ def _legend_row_major_order(items, ncol):
     return [grid[r][c] for c in range(ncol) for r in range(nrows) if grid[r][c] is not None]
 
 
+# The four score curves shown in the score grid / score row figures:
+# (score function, criterion name).
+SCORE_PANELS = [
+    (lambda df: binned_score_delta(df, "critical_retention"), "Critical retention"),
+    (lambda df: binned_score_delta(df, "successor_retention"), "Successor retention"),
+    (binned_score_frontier, "Frontier distance"),
+    (binned_score_slack, "Slack correlation"),
+]
+
+
+def _draw_score_panel(ax, data, score_fn, handles_by_size, markersize=2.5):
+    """One score curve per instance size on `ax`; records the first line
+    handle per size in `handles_by_size` for the shared figure legend."""
+    for size in GRID_SIZE_ORDER:
+        df = data.get(size)
+        if df is None:
+            continue
+        score = score_fn(df)
+        lines = ax.plot(score.index * 10 + 5, score.values,
+                        color=GRID_SIZE_COLORS[size], linestyle=SIZE_LINESTYLES[size],
+                        marker=SIZE_MARKERS[size], markersize=markersize, label=size)
+        handles_by_size.setdefault(size, lines[0])
+
+    ax.axhline(0.0, color="black", linestyle=":", linewidth=1, zorder=0)
+    ax.grid(True, axis="y", color="#CCCCCC")
+    ax.set_axisbelow(True)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+
+def _score_legend(fig, handles_by_size, ncol, **kwargs):
+    """Shared size legend below the panels.
+
+    Reads left-to-right, top-to-bottom in ascending instance size (matching
+    the x-axis order used elsewhere); reordered into matplotlib's
+    column-major fill so that row-major order is what's actually displayed.
+    "outside lower center" (rather than a manual bbox_to_anchor) is
+    constrained-layout-aware, so the figure reserves real space for the
+    legend below the panels instead of clipping it at save time.
+    """
+    present_sizes = [s for s in GRID_LEGEND_ORDER if s in handles_by_size]
+    legend_sizes = _legend_row_major_order(present_sizes, ncol)
+    legend_handles = [handles_by_size[s] for s in legend_sizes]
+    fig.legend(legend_handles, legend_sizes, loc="outside lower center",
+               ncol=ncol, frameon=False, **kwargs)
+
+
+def plot_score_row(data):
+    """Compact 1x4 variant of the score grid: same four curves side by side,
+    criterion names as panel titles and a single shared x-label, so the
+    figure takes about a third of the grid's height."""
+    with plt.rc_context(set_thesis_style()):
+        fig, axes = plt.subplots(1, 4, sharex=True, figsize=(TEXTWIDTH, TEXTWIDTH * 0.36))
+
+        handles_by_size = {}
+        for ax, (score_fn, name) in zip(axes, SCORE_PANELS):
+            _draw_score_panel(ax, data, score_fn, handles_by_size, markersize=2)
+            ax.set_title(name)
+            ax.set_xticks([0, 50, 100])
+            ax.set_xlabel("Episode progress (%)", fontsize=8)
+            ax.tick_params(labelsize=7)
+        axes[0].set_ylabel("Score")
+
+        # All sizes in one row to keep the figure flat; short handles and
+        # tight spacing so nine entries fit within the text width.
+        _score_legend(fig, handles_by_size, ncol=len(handles_by_size),
+                      fontsize=7, handlelength=1.5, handletextpad=0.4,
+                      columnspacing=0.9)
+
+        fig.savefig(OUT_DIR / "diagnostics_score_row.pdf")
+        fig.savefig(OUT_DIR / "diagnostics_score_row.png", dpi=300)
+        plt.close(fig)
+        print("  Saved diagnostics_score_row.pdf / .png")
+
+
 def plot_score_grid(data):
     """Combined 2x2 figure with all four score curves, for the thesis."""
-    panels = [
-        (0, 0, lambda df: binned_score_delta(df, "critical_retention"), "Critical retention"),
-        (0, 1, lambda df: binned_score_delta(df, "successor_retention"), "Successor retention"),
-        (1, 0, binned_score_frontier, "Frontier distance"),
-        (1, 1, binned_score_slack, "Slack correlation"),
-    ]
-
     with plt.rc_context(set_thesis_style()):
         fig, axes = plt.subplots(2, 2, sharex=True, figsize=(TEXTWIDTH, TEXTWIDTH * 0.85))
 
         handles_by_size = {}
-        for row, col, score_fn, ylabel in panels:
-            ax = axes[row, col]
-            for size in GRID_SIZE_ORDER:
-                df = data.get(size)
-                if df is None:
-                    continue
-                score = score_fn(df)
-                lines = ax.plot(score.index * 10 + 5, score.values,
-                                color=GRID_SIZE_COLORS[size], linestyle=SIZE_LINESTYLES[size],
-                                marker=SIZE_MARKERS[size], markersize=2.5, label=size)
-                if size not in handles_by_size:
-                    handles_by_size[size] = lines[0]
-
-            ax.axhline(0.0, color="black", linestyle=":", linewidth=1, zorder=0)
-            ax.set_ylabel(ylabel)
-            ax.grid(True, axis="y", color="#CCCCCC")
-            ax.set_axisbelow(True)
-            ax.spines["top"].set_visible(False)
-            ax.spines["right"].set_visible(False)
+        for ax, (score_fn, name) in zip(axes.flat, SCORE_PANELS):
+            _draw_score_panel(ax, data, score_fn, handles_by_size)
+            ax.set_ylabel(name)
 
         axes[1, 0].set_xlabel("Episode progress (%)")
         axes[1, 1].set_xlabel("Episode progress (%)")
 
-        # Legend reads left-to-right, top-to-bottom in ascending instance
-        # size (matching the x-axis order used elsewhere); reorder into
-        # matplotlib's column-major fill so that row-major order is what's
-        # actually displayed.
-        legend_ncol = 5
-        present_sizes = [s for s in GRID_LEGEND_ORDER if s in handles_by_size]
-        legend_sizes = _legend_row_major_order(present_sizes, legend_ncol)
-        legend_handles = [handles_by_size[s] for s in legend_sizes]
-
-        # "outside lower center" (rather than a manual bbox_to_anchor) is
-        # constrained-layout-aware, so the figure reserves real space for
-        # the legend below the panels instead of clipping it at save time.
-        fig.legend(legend_handles, legend_sizes, loc="outside lower center",
-                   ncol=legend_ncol, frameon=False)
+        _score_legend(fig, handles_by_size, ncol=5)
 
         fig.savefig(OUT_DIR / "diagnostics_score_grid.pdf")
+        # Also as SVG, with all text kept as real text elements (not outlined
+        # to paths) so labels, ticks and legend entries stay editable.
+        with plt.rc_context({"svg.fonttype": "none"}):
+            fig.savefig(OUT_DIR / "diagnostics_score_grid.svg", metadata={"Date": None})
         plt.close(fig)
-        print("  Saved diagnostics_score_grid.pdf")
+        print("  Saved diagnostics_score_grid.pdf / .svg")
 
 
 def plot_score_bars(table):
@@ -520,6 +563,9 @@ def main():
 
     print("\nGenerating score grid ...")
     plot_score_grid(data)
+
+    print("\nGenerating score row ...")
+    plot_score_row(data)
 
     print("\nGenerating score bars ...")
     plot_score_bars(table)
